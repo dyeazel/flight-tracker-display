@@ -12,12 +12,26 @@ from-scratch rewrite in a separate project, not a replacement in place.
 
 ## Status
 
-Milestones 0-6 (of the implementation plan) are done and verified on real
-hardware: toolchain, WiFi, display, the authenticated OpenSky call, the
-full data pipeline, rendering, and watchdog hardening. **Milestone 7 (a
-multi-hour soak test) has not been run yet** - that's the actual proof the
-migration solved the original fragmentation problem, not just that it
-compiles and runs briefly. See "What Milestone 7 should watch for" below.
+All milestones (0-7) are done and verified on real hardware: toolchain,
+WiFi, display, the authenticated OpenSky call, the full data pipeline,
+rendering, watchdog hardening, and a soak test.
+
+**Milestone 7 (soak test) results**: ~9h44m total (6:36 AM-4:19 PM),
+spanning one full scheduled 6h self-reboot cycle. Combined across both
+segments: 766 successful fetches, 1 transient TLS connect failure
+(handled correctly - error screen shown, backed off, recovered next
+cycle), 0 WiFi reconnects needed. **`ESP.getMaxAllocHeap()` (the real
+fragmentation signal) was identical - 110,580 bytes - at every single
+reading in both segments, for the entire run.** That's the core question
+this migration exists to answer, and the answer is a clean flat line, not
+the degradation-over-uptime the MicroPython version showed. See "What
+Milestone 7 watched for" below for what a longer/future run should keep
+checking.
+
+The soak run also surfaced a real bug - the RTC-memory-based counters
+this instrumentation originally used didn't survive the scheduled
+self-reboot - since fixed. See "RTC memory doesn't survive
+`esp_restart_noos()`" below.
 
 ## Build / flash / monitor
 
@@ -118,23 +132,49 @@ that never calls `markProgress()`) and recovered cleanly and repeatably -
 `rst:0xc (SW_CPU_RESET)`, no panic, clean reboot, WiFi reconnects. Not
 just trusted to compile.
 
-## What Milestone 7 (not yet run) should watch for
+### RTC memory doesn't survive `esp_restart_noos()` here
 
-A multi-hour (8-12h minimum, ideally 24h+) unattended run, logging over
-time:
+The soak-test instrumentation (`bootCount`/`fetchOkCount`/etc. in
+`main.cpp`) originally used `RTC_DATA_ATTR` variables, on the assumption
+(standard for ESP32) that RTC "slow memory" survives any reset except a
+true power-on/brownout - so these counters would accumulate across the
+scheduled 6h self-reboot, not just since the last boot. A real 9h44m soak
+run showed otherwise: the counters silently reset to zero exactly at the
+self-reboot boundary, even though the reboot itself was clean (`SW_CPU_RESET`,
+no panic - `esp_restart_noos()` worked correctly as a restart mechanism,
+just not as RTC-memory-preserving as expected). No source was available
+for this framework distribution to confirm exactly why. Rather than chase
+another undocumented ESP-IDF/RTC-domain subtlety (this is the third
+ISR/reset-related surprise this session - see the two above), switched to
+NVS-backed `Preferences` instead: genuinely non-volatile flash storage,
+immune to whatever RTC-domain behavior `esp_restart_noos()` has, verified
+by force-testing across several real `esp_restart_noos()` cycles (shortened
+`SELF_REBOOT_INTERVAL_MS` temporarily, confirmed `bootCount`/`fetchOkCount`
+correctly continued incrementing across each reboot rather than resetting).
+Costs one small flash write per fetch cycle (roughly once per 30s+),
+well within flash wear limits at that cadence.
+
+## What Milestone 7 watched for (and what a longer run should keep watching)
 
 - `ESP.getFreeHeap()` - target: flat or bounded-sawtooth, not a slow
   decline (a decline would mean an actual leak, e.g. an `HTTPClient`/
   `WiFiClientSecure` object not being cleanly destructed each call).
+  **Result: flat, no decline, across both segments.**
 - `ESP.getMaxAllocHeap()` (largest contiguous block) - target: stays close
   to total free heap. This is the real fragmentation signal, distinct from
-  a leak - the whole reason for this migration.
+  a leak - the whole reason for this migration. **Result: exactly
+  110,580 bytes at every reading, zero movement, for the whole 9h44m run.**
 - TLS/HTTP error rate over time - target: flat, since the original bug's
-  signature was degradation *over uptime*, not a fixed rate.
-- WiFi disconnect/reconnect events.
-- Self-reboot event count (every `SELF_REBOOT_INTERVAL_MS`, 6h) - only
-  after a clean soak should removing this scheduled reboot even be
-  considered, and only with real data in hand.
+  signature was degradation *over uptime*, not a fixed rate. **Result:
+  1 transient failure in 767 attempts (~0.13%), self-recovered, no
+  clustering or worsening trend.**
+- WiFi disconnect/reconnect events. **Result: 0.**
+- Self-reboot event count (every `SELF_REBOOT_INTERVAL_MS`, 6h). **Result:
+  fired once, right on schedule (~5.99h), recovered cleanly.** Given this
+  one run's results, removing the scheduled self-reboot could reasonably
+  be considered after a longer (24h+) run confirms the same flat
+  `maxAllocHeap` trend holds over multiple reboot cycles - not yet done,
+  and not a given just because this one run looked clean.
 
 ## Known simplification: TARGET_CALLSIGNS
 

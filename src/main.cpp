@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <Preferences.h>
 #include <WiFi.h>
 #include <esp_system.h>
 
@@ -21,15 +22,40 @@ DisplayManager display;
 static Flight flights[MAX_ROWS];
 static char missing[MAX_ROWS][12];
 
-// Milestone 8 soak-test instrumentation. RTC_DATA_ATTR survives
-// esp_restart_noos()/software resets (including the scheduled 6h
-// self-reboot), so these counters accumulate across the whole soak run,
-// not just since the last boot - only a true power-on/brownout clears
-// them. See README.md's "What Milestone 8 should watch for".
-RTC_DATA_ATTR static uint32_t bootCount = 0;
-RTC_DATA_ATTR static uint32_t fetchOkCount = 0;
-RTC_DATA_ATTR static uint32_t fetchFailCount = 0;
-RTC_DATA_ATTR static uint32_t wifiReconnectCount = 0;
+// Milestone 8 soak-test instrumentation. Originally used RTC_DATA_ATTR
+// (RTC "slow memory," which is supposed to survive any reset except a
+// true power-on/brownout) so these counters would accumulate across the
+// whole soak run, not just since the last boot. That didn't hold in
+// practice: a real 9h44m soak run showed these counters reset to zero at
+// the scheduled 6h self-reboot (esp_restart_noos()) even though the
+// reboot itself was clean (SW_CPU_RESET, no panic) - i.e.
+// esp_restart_noos() does not reliably preserve RTC memory here, for
+// reasons not confirmed (no source available for this framework
+// distribution to inspect further). Switched to NVS-backed Preferences
+// instead - genuinely non-volatile flash storage, immune to whatever
+// RTC-domain behavior esp_restart_noos() has, at the cost of a small
+// flash write once per fetch cycle (well within flash wear limits at
+// this cadence).
+Preferences soakPrefs;
+static uint32_t bootCount = 0;
+static uint32_t fetchOkCount = 0;
+static uint32_t fetchFailCount = 0;
+static uint32_t wifiReconnectCount = 0;
+
+static void loadSoakCounters() {
+    soakPrefs.begin("soak", false);
+    bootCount = soakPrefs.getUInt("bootCount", 0) + 1;
+    fetchOkCount = soakPrefs.getUInt("fetchOk", 0);
+    fetchFailCount = soakPrefs.getUInt("fetchFail", 0);
+    wifiReconnectCount = soakPrefs.getUInt("wifiRecon", 0);
+    soakPrefs.putUInt("bootCount", bootCount);
+}
+
+static void saveSoakCounters() {
+    soakPrefs.putUInt("fetchOk", fetchOkCount);
+    soakPrefs.putUInt("fetchFail", fetchFailCount);
+    soakPrefs.putUInt("wifiRecon", wifiReconnectCount);
+}
 
 static const char *resetReasonName(esp_reset_reason_t r) {
     switch (r) {
@@ -78,7 +104,7 @@ static void checkDebugToggle() {
 void setup() {
     Serial.begin(115200);
     delay(200);
-    bootCount++;
+    loadSoakCounters();
     Serial.printf("=== flight-tracker-arduino booting (boot #%u, reset reason=%s) ===\n", bootCount,
                   resetReasonName(esp_reset_reason()));
 
@@ -98,6 +124,7 @@ void loop() {
 
     if (!WifiManager::isConnected()) {
         wifiReconnectCount++;
+        saveSoakCounters();
         WifiManager::connect(onWifiAttempt, onWifiProgress);  // dropped mid-run - reconnect
         Serial.print("[wifi] reconnected! IP: ");
         Serial.println(WiFi.localIP());
@@ -108,6 +135,7 @@ void loop() {
 
     if (count < 0) {
         fetchFailCount++;
+        saveSoakCounters();
         Serial.printf("[main] fetch failed: %s\n", OpenSkyClient::lastErrorMessage());
         display.clear(display.black);
         display.drawText8x8(4, 4, "Error fetching data:", display.red, display.black);
@@ -123,6 +151,7 @@ void loop() {
         return;
     }
     fetchOkCount++;
+    saveSoakCounters();
 
     int missingCount = FlightSelector::findMissing(flights, count, missing, MAX_ROWS);
     WatchdogManager::markProgress();
