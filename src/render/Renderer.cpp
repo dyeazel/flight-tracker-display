@@ -41,12 +41,14 @@ void drawTrendIcon(DisplayManager &display, int x, int y, float vrateFpm) {
 }
 
 // Columns, left to right: distance, bearing (direction to look from home),
-// altitude, then its climb/descend icon. Each field is a fixed width
-// (dist 9 chars, bearing 3 chars, altitude 8 chars, icon 8px) regardless
-// of value, via printf field-width specifiers (%9s/%-9s - the C
-// equivalent of the Python version's hand-rolled rjust/ljust, which
-// MicroPython's str lacks), so a later partial redraw can overwrite old
-// text/icon in place without a clear first.
+// altitude, its climb/descend icon, then ground speed. Each field is a
+// fixed width (dist 9 chars, bearing 3 chars, altitude 8 chars, icon 8px,
+// speed 6 chars) regardless of value, via printf field-width specifiers
+// (%9s/%-9s - the C equivalent of the Python version's hand-rolled
+// rjust/ljust, which MicroPython's str lacks), so a later partial redraw
+// can overwrite old text/icon in place without a clear first. The speed
+// column was added last and placed rightmost since that's the only
+// unused space on the 320px-wide display (verified: ends at x=308).
 void drawValueLine(DisplayManager &display, const Flight &f, int x, int y, uint16_t color) {
     char distRaw[16], distField[16];
     snprintf(distRaw, sizeof(distRaw), "%.1fmi", f.distanceMi);
@@ -67,6 +69,12 @@ void drawValueLine(DisplayManager &display, const Flight &f, int x, int y, uint1
 
     int iconX = altX + (int)strlen(altField) * 8 + TREND_ICON_GAP;
     drawTrendIcon(display, iconX, y, f.vrateFpm);
+
+    char spdRaw[16], spdField[16];
+    snprintf(spdRaw, sizeof(spdRaw), "%.0fkt", f.speedKt);
+    snprintf(spdField, sizeof(spdField), "%6s", spdRaw);
+    int spdX = iconX + TREND_ICON_SIZE + TREND_ICON_GAP;
+    display.drawText8x8(spdX, y, spdField, color, display.black);
 }
 
 }  // namespace
