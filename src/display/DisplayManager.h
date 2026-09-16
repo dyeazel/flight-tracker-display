@@ -39,7 +39,7 @@ public:
     void fillTriangle(int cx, int cy, int radius, bool pointingUp, uint16_t color);
 
     // RGB565 colors, computed once in begin().
-    uint16_t white, black, green, gray, red;
+    uint16_t white, black, green, gray, red, yellow;
 
 private:
     TFT_eSPI tft_;

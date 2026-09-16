@@ -207,4 +207,9 @@ void renderValues(DisplayManager &display, Flight *flights, int count) {
     drawHeartbeat(display);
 }
 
+void drawRefreshing(DisplayManager &display) {
+    display.fillRect(display.width() - HEARTBEAT_SIZE - 2, 2, HEARTBEAT_SIZE, HEARTBEAT_SIZE,
+                      display.yellow);
+}
+
 }  // namespace Renderer

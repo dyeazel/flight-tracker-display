@@ -23,6 +23,7 @@ void DisplayManager::begin() {
     green = tft_.color565(0, 255, 0);
     gray = tft_.color565(150, 150, 150);
     red = tft_.color565(255, 60, 60);
+    yellow = tft_.color565(255, 210, 0);
 
     tft_.fillScreen(black);
 }

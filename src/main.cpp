@@ -148,6 +148,12 @@ void loop() {
         Serial.println(WiFi.localIP());
     }
 
+    // Marks the heartbeat yellow for the whole blocking fetch+enrich
+    // window below (OpenSky, then per-flight adsbdb/AeroDataBox lookups) -
+    // without this the square just sits frozen at its last state for
+    // however long that takes, which reads as "stuck" rather than "busy".
+    Renderer::drawRefreshing(display);
+
     float radius = FlightMath::effectiveRadius();
     int count = OpenSkyClient::fetchNearby(radius, flights, MAX_ROWS);
 

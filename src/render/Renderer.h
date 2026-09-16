@@ -23,4 +23,16 @@ void render(DisplayManager &display, Flight *flights, int count, char missing[][
 // because a number changed.
 void renderValues(DisplayManager &display, Flight *flights, int count);
 
+// Marks the heartbeat square yellow to signal an in-progress real poll -
+// call once, right before OpenSkyClient::fetchNearby(). Both fetchNearby()
+// and FlightSelector::enrich() (adsbdb/AeroDataBox lookups) are blocking
+// network calls that can take anywhere from under a second to tens of
+// seconds (retries, a slow lookup), during which neither render() nor
+// renderValues() runs to update the heartbeat - without this, the square
+// just sits frozen at whatever it was for that whole stretch, which reads
+// as "stuck," not "busy." The next render()/renderValues() call overwrites
+// this with the normal green/black toggle once the poll actually
+// completes.
+void drawRefreshing(DisplayManager &display);
+
 }  // namespace Renderer
