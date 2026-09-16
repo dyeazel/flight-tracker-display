@@ -75,3 +75,30 @@ extern const char *const CHARTER_OPERATOR_PREFIXES[CHARTER_OPERATOR_PREFIXES_COU
 #define CALLSIGN_COL_CHARS 10
 #define VALUE_X (4 + CALLSIGN_COL_CHARS * 8 + 4)
 #define HEARTBEAT_SIZE 6
+
+// ---- Wall clock (NTP) ----
+// Needed only for the secondary route-provider cache below (per-local-day
+// freshness, multi-leg time-window matching) - nothing else in this app
+// needs wall-clock time. HOME_TZ_POSIX is a POSIX TZ rule (handles DST
+// automatically) for the tracker's fixed physical location, same
+// assumption already baked into HOME_LAT/HOME_LON - update this if the
+// board is ever relocated to a different timezone.
+#define NTP_SERVER "pool.ntp.org"
+#define HOME_TZ_POSIX "CST6CDT,M3.2.0,M11.1.0"  // America/Chicago
+
+// ---- Secondary route provider (fallback cache) ----
+// FlightSelector::enrich() consults this only when adsbdb has no route or
+// route_is_plausible() flags one as suspect - see RouteCache/RouteProvider
+// and the README's "Secondary route provider" section. Currently backed
+// by NullRouteProvider (always returns false, no-op) - which actual paid
+// API to wire in (AeroDataBox, FlightAware AeroAPI, etc.) is a deliberately
+// deferred decision, so these numbers are placeholders to be revisited
+// once that's chosen. (Reference point: AeroDataBox's RapidAPI "Basic"
+// plan - confirmed a genuine ongoing free tier, not a trial - caps out at
+// 400 API units/1,600 requests per month and 1,000 requests/hour; a
+// callsign lookup's exact per-request unit cost wasn't confirmed, so a
+// real budget for that provider should assume the worst-case tier.)
+#define ROUTE_CACHE_SIZE 32
+#define ROUTE_CACHE_MAX_LEGS 4
+#define ROUTE_PROVIDER_MIN_INTERVAL_MS 1100
+#define ROUTE_PROVIDER_MONTHLY_BUDGET 500

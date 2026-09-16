@@ -176,6 +176,68 @@ well within flash wear limits at that cadence.
   `maxAllocHeap` trend holds over multiple reboot cycles - not yet done,
   and not a given just because this one run looked clean.
 
+## Secondary route provider (fallback cache) - deliberately not wired up yet
+
+adsbdb's route table is static and occasionally stale/wrong -
+`FlightMath::routeIsPlausible()` already sanity-checks a resolved route
+against the aircraft's live position and flags a suspect one with
+`ROUTE_FLAG` (`*`), but nothing double-checks a flagged (or missing)
+route against a second source. `RouteProvider`/`RouteCache`/`TimeSync`
+add that as a generic, provider-agnostic fallback that
+`FlightSelector::enrich()` consults only when adsbdb has nothing or gets
+flagged - but **no concrete provider is wired in**. `RouteProvider.h`
+declares the interface (`fetchRouteLegs()`); `NullRouteProvider.cpp` is
+the only implementation right now, and it always returns false, so this
+whole path is currently inert - confirmed on hardware to leave existing
+enrich()/display behavior unchanged.
+
+Why not just wire up AeroDataBox? Investigated it as the obvious
+candidate and found conflicting information about its RapidAPI "Basic"
+plan - `aerodatabox.com`'s own pricing page describes it as a time-limited
+7-day trial, but the actual RapidAPI marketplace listing (where sign-up
+happens) shows it as a genuine `$0.00/mo` ongoing plan: 400 API
+units/month, 1,600 requests/month (hard caps), 1,000 requests/hour rate
+limit, no trial language. Given that ambiguity, chose to build the
+caching/fallback architecture generically now and pick the actual
+paid/free provider as a separate follow-up decision, rather than build
+around a specific number that turned out to be uncertain. If AeroDataBox
+is the one eventually chosen: its exact per-request unit cost for a
+callsign lookup wasn't confirmed (endpoints are billed at 1/2/6 units
+depending on tier), so `ROUTE_PROVIDER_MONTHLY_BUDGET` in `config.h`
+should be set conservatively (worst case ~65 requests/month at 6
+units/request) until that's verified against a real account.
+
+Design notes for whoever wires in a real provider:
+- **Cache key is the callsign, not the tail number (ICAO24)** - a tail
+  number is reused by the same aircraft across many different city-pair
+  legs in a day, so keying by it would be actively wrong. A callsign
+  (flight number) corresponds to a specific published route for a given
+  day.
+- **Cache freshness is by local calendar day, not UTC** - UTC midnight
+  falls at 6-8pm Central (`HOME_TZ_POSIX` in `config.h`), squarely in
+  peak evening flight-watching hours; keying by UTC day would force a
+  spurious refetch mid-evening daily. `TimeSync::currentLocalDay()`
+  handles this (including DST, via a POSIX TZ rule) - confirmed on
+  hardware reporting correct local time (`CDT` in September) after NTP
+  sync.
+- **Multi-city callsigns** (one flight number flying e.g. ORD->DFW->LAX
+  in a day) are handled by caching ALL legs `fetchRouteLegs()` returns
+  for that callsign+day, then picking whichever leg's `[depUtc, arrUtc]`
+  window contains "now" (falling back to the closest leg by time) - no
+  extra network round-trip needed to disambiguate. Verified via a
+  temporary synthetic test on hardware (single-leg, multi-leg-in-window,
+  and between-legs-nearest-fallback cases, all passed) before removing
+  the test scaffolding.
+- `RouteLeg` (see `RouteProvider.h`) carries no airline name - only a
+  real provider's response will determine whether one is available. Until
+  then, if adsbdb has no route at all for a callsign, a successful
+  `RouteCache` fallback still won't make that flight render as
+  "commercial" (`Flight::isCommercial()` checks `airline[0]`) - only the
+  flagged-but-present-route case gets the full benefit today.
+- The request budget is tracked in NVS (`Preferences`, namespace
+  `"route"`), mirroring the soak-counter pattern in `main.cpp`, so it
+  survives the scheduled self-reboot instead of resetting mid-month.
+
 ## Known simplification: TARGET_CALLSIGNS
 
 `OpenSkyClient::fetchNearby()` folds the "keep only the closest N flights"

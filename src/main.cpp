@@ -11,6 +11,7 @@
 #include "network/OpenSkyClient.h"
 #include "network/WifiManager.h"
 #include "render/Renderer.h"
+#include "time/TimeSync.h"
 #include "watchdog/WatchdogManager.h"
 
 // Full app: Arduino/C++ port of cyd_nearby_flights.py's main() loop.
@@ -114,6 +115,12 @@ void setup() {
     Serial.print("[wifi] connected! IP: ");
     Serial.println(WiFi.localIP());
 
+    // Needed for RouteCache's per-local-day freshness and multi-leg
+    // time-window matching - see TimeSync.h. Sync completes in the
+    // background; loop() logs the first successful sync for verification.
+    TimeSync::begin();
+    Serial.println("[time] NTP sync requested");
+
     WatchdogManager::begin();
     Serial.println("[watchdog] armed");
 }
@@ -121,6 +128,17 @@ void setup() {
 void loop() {
     WatchdogManager::markProgress();
     checkDebugToggle();
+
+    static bool timeSyncLogged = false;
+    if (!timeSyncLogged && TimeSync::isSynced()) {
+        time_t now = TimeSync::nowUtc();
+        struct tm local;
+        localtime_r(&now, &local);
+        char buf[32];
+        strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S %Z", &local);
+        Serial.printf("[time] synced: %s (local)\n", buf);
+        timeSyncLogged = true;
+    }
 
     if (!WifiManager::isConnected()) {
         wifiReconnectCount++;

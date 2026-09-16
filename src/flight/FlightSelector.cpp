@@ -6,6 +6,7 @@
 #include "FlightMath.h"
 #include "config.h"
 #include "network/AdsbdbClient.h"
+#include "network/RouteCache.h"
 
 namespace FlightSelector {
 
@@ -39,13 +40,37 @@ bool enrich(Flight *flights, int count) {
         }
 
         AdsbdbClient::RouteInfo info;
-        if (!AdsbdbClient::lookupRoute(f.callsign, &info)) continue;
+        bool haveRoute = AdsbdbClient::lookupRoute(f.callsign, &info);
 
         bool plausible = true;
-        if (info.haveOriginCoords && info.haveDestCoords) {
+        if (haveRoute && info.haveOriginCoords && info.haveDestCoords) {
             plausible = FlightMath::routeIsPlausible(f.lat, f.lon, info.originLat, info.originLon,
                                                        info.destLat, info.destLon);
         }
+
+        // adsbdb's route table is static and can be stale/wrong - if it
+        // has nothing, or routeIsPlausible() flags what it has as
+        // geometrically implausible, check the secondary provider cache
+        // before falling back to a suspect/blank route. See
+        // RouteCache/RouteProvider (currently a no-op stub - no concrete
+        // provider is wired in yet, see README).
+        if (!haveRoute || !plausible) {
+            RouteLeg leg;
+            if (RouteCache::lookupActiveLeg(f.callsign, &leg)) {
+                // Trusted secondary source - not flagged. Note: RouteLeg
+                // carries no airline name, so if adsbdb had no route at
+                // all (haveRoute false), this flight still won't render
+                // as "commercial" (see Flight::isCommercial()) until a
+                // real provider that also supplies an airline name is
+                // wired in.
+                strncpy(f.origin, leg.originCode, sizeof(f.origin) - 1);
+                f.origin[sizeof(f.origin) - 1] = '\0';
+                strncpy(f.destination, leg.destinationCode, sizeof(f.destination) - 1);
+                f.destination[sizeof(f.destination) - 1] = '\0';
+                continue;
+            }
+        }
+        if (!haveRoute) continue;
 
         strncpy(f.airline, info.airline, sizeof(f.airline) - 1);
         strncpy(f.airlineCode, info.airlineCode, sizeof(f.airlineCode) - 1);
