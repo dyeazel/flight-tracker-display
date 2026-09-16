@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Arduino.h>
+#include <time.h>
 
 // One tracked aircraft. Fixed-size char[] fields (not String) throughout -
 // this struct lives in a per-loop hot path, and Arduino's String does its
@@ -35,10 +36,20 @@ struct Flight {
     char origin[8] = "";       // may carry ROUTE_FLAG '*' suffix
     char destination[8] = "";  // may carry ROUTE_FLAG '*' suffix
 
+    // Scheduled departure/arrival, UTC epoch, 0 if unknown - only ever
+    // populated from the secondary route provider (RouteCache/
+    // AeroDataBoxClient) via FlightSelector::enrich(); adsbdb never
+    // supplies times. Renderer draws a third "timeline" row for a
+    // commercial flight only when both are set.
+    time_t depUtc = 0;
+    time_t arrUtc = 0;
+
     // Render-time cache so render_values()-equivalent can redraw just the
-    // value line without a full clear. -1 = "not currently drawn".
+    // value line (and timeline row) without a full clear. -1 = "not
+    // currently drawn".
     int16_t valueY = -1;
     uint16_t valueColor = 0;
+    int16_t timelineY = -1;
 
     bool isCommercial() const { return airline[0] != '\0'; }
 };

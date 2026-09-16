@@ -18,6 +18,12 @@ struct CacheEntry {
     RouteLeg legs[ROUTE_CACHE_MAX_LEGS];
     bool valid = false;
     uint32_t lastUsedMs = 0;
+    // Real-time (not simulated) millis() of the last actual provider
+    // fetch for this callsign - distinct from lastUsedMs (bumped on every
+    // cache hit, used, used for LRU eviction). Gates the per-callsign
+    // ROUTE_CACHE_MIN_REFETCH_INTERVAL_MS floor on the staleness-refetch
+    // path below.
+    unsigned long lastFetchMs = 0;
 };
 
 CacheEntry cache[ROUTE_CACHE_SIZE];
@@ -114,6 +120,23 @@ bool pickActiveLeg(const CacheEntry &entry, time_t now, RouteLeg *out) {
     return true;
 }
 
+// True only if EVERY cached leg's arrival is both known and more than
+// ROUTE_CACHE_STALE_GRACE_SEC in the past - i.e. nothing is currently
+// active or still upcoming (a layover between two already-known legs
+// correctly returns false here, since the next leg hasn't arrived yet).
+// An entry with no legs at all (a remembered "nothing today" result) is
+// never considered expired this way - that's intentionally retried only
+// once per day, unchanged from the original design.
+bool allLegsExpired(const CacheEntry &entry, time_t now) {
+    if (entry.legCount == 0) return false;
+    for (int i = 0; i < entry.legCount; i++) {
+        const RouteLeg &leg = entry.legs[i];
+        if (leg.arrUtc == 0) return false;
+        if (now <= leg.arrUtc + (time_t)ROUTE_CACHE_STALE_GRACE_SEC) return false;
+    }
+    return true;
+}
+
 }  // namespace
 
 bool lookupActiveLeg(const char *callsign, RouteLeg *out) {
@@ -122,6 +145,36 @@ bool lookupActiveLeg(const char *callsign, RouteLeg *out) {
     time_t now = TimeSync::nowUtc();
 
     CacheEntry *entry = findEntry(callsign);
+
+    // Cached for today, but every known leg's arrival (+ grace) has
+    // already passed - re-check with the provider (a new leg may since
+    // have appeared) rather than keep serving arrived/aged-out data
+    // forever, but no more than once per callsign per
+    // ROUTE_CACHE_MIN_REFETCH_INTERVAL_MS - otherwise a callsign with no
+    // new leg yet would get hammered on every ~30s poll waiting for one.
+    if (entry != nullptr && entry->cachedDay == today && allLegsExpired(*entry, now) &&
+        (millis() - entry->lastFetchMs) >= ROUTE_CACHE_MIN_REFETCH_INTERVAL_MS) {
+        unsigned long nowMs = millis();
+        if ((lastCallMs == 0 || nowMs - lastCallMs >= ROUTE_PROVIDER_MIN_INTERVAL_MS) &&
+            budgetAllows(today)) {
+            RouteLeg legs[ROUTE_CACHE_MAX_LEGS];
+            int legCount = 0;
+            lastCallMs = nowMs;
+            bool ok = fetchRouteLegs(callsign, legs, ROUTE_CACHE_MAX_LEGS, &legCount);
+            recordCall();
+            entry->lastFetchMs = nowMs;
+            if (ok) {
+                entry->legCount = (uint8_t)legCount;
+                for (int i = 0; i < legCount; i++) entry->legs[i] = legs[i];
+            }
+            // else: refetch failed - keep serving the previous (now
+            // aged-out) legs rather than blank them; pickActiveLeg below
+            // still returns the best (if stale) match.
+        }
+        // else: globally rate-limited or over budget - fall through and
+        // keep serving the aged-out entry as-is.
+    }
+
     if (entry == nullptr || entry->cachedDay != today) {
         unsigned long nowMs = millis();
         bool rateOk = (lastCallMs == 0) || (nowMs - lastCallMs >= ROUTE_PROVIDER_MIN_INTERVAL_MS);
@@ -134,6 +187,7 @@ bool lookupActiveLeg(const char *callsign, RouteLeg *out) {
             entry = allocEntry(callsign);
             entry->cachedDay = today;
             entry->valid = true;
+            entry->lastFetchMs = nowMs;
             if (ok) {
                 entry->legCount = (uint8_t)legCount;
                 for (int i = 0; i < legCount; i++) entry->legs[i] = legs[i];

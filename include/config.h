@@ -50,6 +50,8 @@ extern const char *const TARGET_CALLSIGNS[];
 #define OPENSKY_TOKEN_URL "https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token"
 #define ADSBDB_URL_FMT "https://api.adsbdb.com/v0/callsign/%s"
 #define USER_AGENT "Mozilla/5.0 (compatible; cyd_nearby_flights_arduino/1.0)"
+#define AERODATABOX_HOST "aerodatabox.p.rapidapi.com"
+#define AERODATABOX_URL_FMT "https://aerodatabox.p.rapidapi.com/flights/callsign/%s"
 
 // ---- OAuth2 token cache ----
 #define OPENSKY_TOKEN_TTL_MS (25UL * 60UL * 1000UL)
@@ -89,16 +91,49 @@ extern const char *const CHARTER_OPERATOR_PREFIXES[CHARTER_OPERATOR_PREFIXES_COU
 // ---- Secondary route provider (fallback cache) ----
 // FlightSelector::enrich() consults this only when adsbdb has no route or
 // route_is_plausible() flags one as suspect - see RouteCache/RouteProvider
-// and the README's "Secondary route provider" section. Currently backed
-// by NullRouteProvider (always returns false, no-op) - which actual paid
-// API to wire in (AeroDataBox, FlightAware AeroAPI, etc.) is a deliberately
-// deferred decision, so these numbers are placeholders to be revisited
-// once that's chosen. (Reference point: AeroDataBox's RapidAPI "Basic"
-// plan - confirmed a genuine ongoing free tier, not a trial - caps out at
-// 400 API units/1,600 requests per month and 1,000 requests/hour; a
-// callsign lookup's exact per-request unit cost wasn't confirmed, so a
-// real budget for that provider should assume the worst-case tier.)
+// and the README's "Secondary route provider" section. Backed by
+// AeroDataBoxClient (via RapidAPI). Its confirmed "Basic" plan (a genuine
+// ongoing free tier, not a trial) caps out at 400 API units / 1,600
+// requests per month and 1,000 requests/hour; the callsign-lookup
+// endpoint's exact per-request unit cost was never confirmed (tiers bill
+// 1/2/6 units), so the monthly budget below assumes the worst case
+// (~65 requests/month at 6 units/request) with a safety margin - raise it
+// once the real per-request cost is confirmed from RapidAPI's usage
+// dashboard after some live calls.
+//
+// ROUTE_PROVIDER_MIN_INTERVAL_MS was originally set to ~3.7s to respect
+// the 1,000/hour cap on its own - but that's checked inline in enrich()'s
+// tight per-flight loop, so when several distinct flagged callsigns
+// needed a fresh lookup in the SAME poll cycle, only the first got
+// through and the rest stayed stuck showing adsbdb's flagged/stale route
+// for cycle after cycle (confirmed live: AAL1841/EDV4900/DAL1356 all
+// legitimately flagged - their current position was nowhere near adsbdb's
+// claimed route - but only ever resolved one at a time, one per ~30s
+// poll). The monthly budget (60) already caps total volume far below what
+// the hourly limit could ever bind on regardless of burst timing, making
+// that wide a per-call spacing unnecessary - narrowed to just enough to
+// avoid firing requests literally simultaneously.
 #define ROUTE_CACHE_SIZE 32
 #define ROUTE_CACHE_MAX_LEGS 4
-#define ROUTE_PROVIDER_MIN_INTERVAL_MS 1100
-#define ROUTE_PROVIDER_MONTHLY_BUDGET 500
+#define ROUTE_PROVIDER_MIN_INTERVAL_MS 500
+#define ROUTE_PROVIDER_MONTHLY_BUDGET 60
+
+// A cached leg more than this long past its arrival time (with no other
+// cached leg still upcoming/active) is treated as aged-out - RouteCache
+// re-checks with the provider rather than keep serving arrived data, but
+// never more often than once per callsign per
+// ROUTE_CACHE_MIN_REFETCH_INTERVAL_MS (15 min), so a callsign with no new
+// leg yet doesn't get hammered every ~30s poll waiting for one. This is a
+// per-callsign floor, distinct from ROUTE_PROVIDER_MIN_INTERVAL_MS's
+// global inter-request spacing.
+#define ROUTE_CACHE_STALE_GRACE_SEC (10UL * 60UL)
+#define ROUTE_CACHE_MIN_REFETCH_INTERVAL_MS (15UL * 60UL * 1000UL)
+
+// ---- Departure/arrival timeline row ----
+// Rendered as a fixed-width text bar for a commercial flight with known
+// AeroDataBox times: left-justified departure "H:mm", dashes, a '+' at
+// the current-time position between departure and arrival, right-
+// justified arrival "H:mm". 38 chars * 8px/char = 304px; from the x=4
+// left margin that ends at x=308, the same verified-safe right edge
+// drawValueLine's speed column already uses on this 320px display.
+#define TIMELINE_WIDTH_CHARS 38

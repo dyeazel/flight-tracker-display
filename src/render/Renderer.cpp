@@ -2,9 +2,11 @@
 
 #include <Arduino.h>
 #include <string.h>
+#include <time.h>
 
 #include "config.h"
 #include "flight/FlightMath.h"
+#include "time/TimeSync.h"
 
 namespace Renderer {
 
@@ -77,6 +79,47 @@ void drawValueLine(DisplayManager &display, const Flight &f, int x, int y, uint1
     display.drawText8x8(spdX, y, spdField, color, display.black);
 }
 
+// A fixed-width text "timeline" bar for a commercial flight with known
+// departure/arrival times (real, from AeroDataBox, or calculated - see
+// FlightSelector::estimateTimes() - rendered identically either way):
+// left-justified departure, dashes, a '+' at the current-time position
+// between the two, right-justified arrival - local time (the globally-
+// configured HOME_TZ_POSIX, same as TimeSync's own local-day bucketing),
+// H:mm (no leading zero on the hour). Redrawn on every dead-reckoning
+// tick (see renderValues()), not just on a real poll, so the marker keeps
+// moving between polls - confirmed live moving one text-column position
+// (out of 38) every couple of redraw ticks under typical flight speeds.
+void drawTimelineRow(DisplayManager &display, const Flight &f, int x, int y, uint16_t color) {
+    time_t dep = f.depUtc, arr = f.arrUtc;
+    struct tm depTm, arrTm;
+    localtime_r(&dep, &depTm);
+    localtime_r(&arr, &arrTm);
+
+    char depRaw[8], arrRaw[8], depField[8], arrField[8];
+    snprintf(depRaw, sizeof(depRaw), "%d:%02d", depTm.tm_hour, depTm.tm_min);
+    snprintf(arrRaw, sizeof(arrRaw), "%d:%02d", arrTm.tm_hour, arrTm.tm_min);
+    snprintf(depField, sizeof(depField), "%-5s", depRaw);
+    snprintf(arrField, sizeof(arrField), "%5s", arrRaw);
+
+    char line[TIMELINE_WIDTH_CHARS + 1];
+    memset(line, '-', TIMELINE_WIDTH_CHARS);
+    line[TIMELINE_WIDTH_CHARS] = '\0';
+    memcpy(line, depField, 5);
+    memcpy(line + TIMELINE_WIDTH_CHARS - 5, arrField, 5);
+
+    time_t now = TimeSync::nowUtc();
+    double frac = (arr > dep) ? (double)(now - dep) / (double)(arr - dep) : 0;
+    if (frac < 0) frac = 0;
+    if (frac > 1) frac = 1;
+    int middleLen = TIMELINE_WIDTH_CHARS - 10;
+    int markerPos = 5 + (int)(frac * (middleLen - 1) + 0.5);
+    if (markerPos < 5) markerPos = 5;
+    if (markerPos > TIMELINE_WIDTH_CHARS - 6) markerPos = TIMELINE_WIDTH_CHARS - 6;
+    line[markerPos] = '+';
+
+    display.drawText8x8(x, y, line, color, display.black);
+}
+
 }  // namespace
 
 void render(DisplayManager &display, Flight *flights, int count, char missing[][12],
@@ -103,6 +146,7 @@ void render(DisplayManager &display, Flight *flights, int count, char missing[][
     for (int i = 0; i < count; i++) {
         Flight &f = flights[i];
         f.valueY = -1;
+        f.timelineY = -1;
         uint16_t statusColor = f.onGround ? display.gray : display.green;
         bool isCommercial = f.isCommercial();
 
@@ -135,6 +179,12 @@ void render(DisplayManager &display, Flight *flights, int count, char missing[][
         f.valueColor = statusColor;
         drawValueLine(display, f, VALUE_X, y, statusColor);
         y += 12;
+
+        if (isCommercial && f.depUtc != 0 && f.arrUtc != 0 && f.arrUtc > f.depUtc) {
+            f.timelineY = y;
+            drawTimelineRow(display, f, 4, y, display.gray);
+            y += 12;
+        }
         if (y > display.height() - 24) break;
     }
 
@@ -149,6 +199,9 @@ void renderValues(DisplayManager &display, Flight *flights, int count) {
     for (int i = 0; i < count; i++) {
         if (flights[i].valueY >= 0) {
             drawValueLine(display, flights[i], VALUE_X, flights[i].valueY, flights[i].valueColor);
+        }
+        if (flights[i].timelineY >= 0) {
+            drawTimelineRow(display, flights[i], 4, flights[i].timelineY, display.gray);
         }
     }
     drawHeartbeat(display);

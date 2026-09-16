@@ -3,12 +3,46 @@
 #include <algorithm>
 #include <string.h>
 
+#include <Arduino.h>
+
 #include "FlightMath.h"
 #include "config.h"
 #include "network/AdsbdbClient.h"
 #include "network/RouteCache.h"
+#include "time/TimeSync.h"
 
 namespace FlightSelector {
+
+namespace {
+
+// Estimates depUtc/arrUtc from current position/speed and adsbdb's
+// origin/destination coordinates when no real schedule data is
+// available - ports nearby_flights.py's "calculated" fallback verbatim
+// (same distance-already-covered/distance-remaining divided by current
+// speed math): only meaningful airborne with a nonzero speed, since
+// distance/speed is undefined at a dead stop. Leaves depUtc/arrUtc at 0
+// (already the case on entry, since RouteCache's real-time path always
+// `continue`s before reaching this) for whichever half has no known
+// coordinate to measure from.
+void estimateTimes(Flight &f, const AdsbdbClient::RouteInfo &info) {
+    if (!TimeSync::isSynced() || f.onGround || f.speedKt <= 0) return;
+    float speedMph = f.speedKt * 1.15078f;
+    time_t now = TimeSync::nowUtc();
+
+    if (info.haveOriginCoords) {
+        float distFromOrigin =
+            FlightMath::haversineMiles(info.originLat, info.originLon, f.lat, f.lon);
+        float hoursSinceTakeoff = distFromOrigin / speedMph;
+        f.depUtc = now - (time_t)(hoursSinceTakeoff * 3600.0f);
+    }
+    if (info.haveDestCoords) {
+        float distRemaining = FlightMath::haversineMiles(f.lat, f.lon, info.destLat, info.destLon);
+        float hoursRemaining = distRemaining / speedMph;
+        f.arrUtc = now + (time_t)(hoursRemaining * 3600.0f);
+    }
+}
+
+}  // namespace
 
 int findMissing(const Flight *flights, int count, char missingOut[][12], int maxMissing) {
     int found = 0;
@@ -47,26 +81,46 @@ bool enrich(Flight *flights, int count) {
             plausible = FlightMath::routeIsPlausible(f.lat, f.lon, info.originLat, info.originLon,
                                                        info.destLat, info.destLon);
         }
+        if (DEBUG) {
+            Serial.printf(
+                "[enrich] %s haveRoute=%d origin=%s(%.4f,%.4f) dest=%s(%.4f,%.4f) "
+                "cur=(%.4f,%.4f) plausible=%d\n",
+                f.callsign, haveRoute, info.originCode, info.originLat, info.originLon,
+                info.destinationCode, info.destLat, info.destLon, f.lat, f.lon, plausible);
+        }
 
         // adsbdb's route table is static and can be stale/wrong - if it
         // has nothing, or routeIsPlausible() flags what it has as
         // geometrically implausible, check the secondary provider cache
-        // before falling back to a suspect/blank route. See
-        // RouteCache/RouteProvider (currently a no-op stub - no concrete
-        // provider is wired in yet, see README).
+        // (AeroDataBox, via RouteCache/RouteProvider) before falling back
+        // to a suspect/blank route.
         if (!haveRoute || !plausible) {
             RouteLeg leg;
-            if (RouteCache::lookupActiveLeg(f.callsign, &leg)) {
-                // Trusted secondary source - not flagged. Note: RouteLeg
-                // carries no airline name, so if adsbdb had no route at
-                // all (haveRoute false), this flight still won't render
-                // as "commercial" (see Flight::isCommercial()) until a
-                // real provider that also supplies an airline name is
-                // wired in.
+            bool gotLeg = RouteCache::lookupActiveLeg(f.callsign, &leg);
+            if (DEBUG) {
+                Serial.printf("[enrich] %s RouteCache -> gotLeg=%d origin=%s dest=%s airline=%s "
+                              "depUtc=%ld arrUtc=%ld\n",
+                              f.callsign, gotLeg, leg.originCode, leg.destinationCode, leg.airline,
+                              (long)leg.depUtc, (long)leg.arrUtc);
+            }
+            if (gotLeg) {
+                // Trusted secondary source - not flagged.
                 strncpy(f.origin, leg.originCode, sizeof(f.origin) - 1);
                 f.origin[sizeof(f.origin) - 1] = '\0';
                 strncpy(f.destination, leg.destinationCode, sizeof(f.destination) - 1);
                 f.destination[sizeof(f.destination) - 1] = '\0';
+                // If adsbdb had no route at all, this is also what makes
+                // the flight render as "commercial" (Flight::isCommercial()
+                // checks airline[0]) - only populated if AeroDataBox's
+                // response included an airline for this leg.
+                if (leg.airline[0]) {
+                    strncpy(f.airline, leg.airline, sizeof(f.airline) - 1);
+                    f.airline[sizeof(f.airline) - 1] = '\0';
+                    strncpy(f.airlineCode, leg.airlineCode, sizeof(f.airlineCode) - 1);
+                    f.airlineCode[sizeof(f.airlineCode) - 1] = '\0';
+                }
+                f.depUtc = leg.depUtc;
+                f.arrUtc = leg.arrUtc;
                 continue;
             }
         }
@@ -76,6 +130,11 @@ bool enrich(Flight *flights, int count) {
         strncpy(f.airlineCode, info.airlineCode, sizeof(f.airlineCode) - 1);
         strncpy(f.origin, info.originCode, sizeof(f.origin) - 1);
         strncpy(f.destination, info.destinationCode, sizeof(f.destination) - 1);
+        estimateTimes(f, info);
+        if (DEBUG) {
+            Serial.printf("[enrich] %s calculated depUtc=%ld arrUtc=%ld onGround=%d speedKt=%.1f\n",
+                          f.callsign, (long)f.depUtc, (long)f.arrUtc, f.onGround, f.speedKt);
+        }
 
         if (!plausible) {
             anyFlagged = true;

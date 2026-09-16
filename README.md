@@ -176,38 +176,80 @@ well within flash wear limits at that cadence.
   `maxAllocHeap` trend holds over multiple reboot cycles - not yet done,
   and not a given just because this one run looked clean.
 
-## Secondary route provider (fallback cache) - deliberately not wired up yet
+## Secondary route provider (fallback cache) - AeroDataBox
 
 adsbdb's route table is static and occasionally stale/wrong -
 `FlightMath::routeIsPlausible()` already sanity-checks a resolved route
 against the aircraft's live position and flags a suspect one with
 `ROUTE_FLAG` (`*`), but nothing double-checks a flagged (or missing)
-route against a second source. `RouteProvider`/`RouteCache`/`TimeSync`
-add that as a generic, provider-agnostic fallback that
+route against a second source on its own. `RouteProvider`/`RouteCache`/
+`TimeSync` add that as a generic, provider-agnostic fallback that
 `FlightSelector::enrich()` consults only when adsbdb has nothing or gets
-flagged - but **no concrete provider is wired in**. `RouteProvider.h`
-declares the interface (`fetchRouteLegs()`); `NullRouteProvider.cpp` is
-the only implementation right now, and it always returns false, so this
-whole path is currently inert - confirmed on hardware to leave existing
-enrich()/display behavior unchanged.
+flagged. `RouteProvider.h` declares the interface (`fetchRouteLegs()`);
+`AeroDataBoxClient.cpp` is the linked implementation, calling
+`https://aerodatabox.p.rapidapi.com/flights/callsign/{callsign}` (RapidAPI
+headers `X-RapidAPI-Key`/`X-RapidAPI-Host`, key in `secrets.h` as
+`AERODATABOX_API_KEY`).
 
-Why not just wire up AeroDataBox? Investigated it as the obvious
-candidate and found conflicting information about its RapidAPI "Basic"
-plan - `aerodatabox.com`'s own pricing page describes it as a time-limited
-7-day trial, but the actual RapidAPI marketplace listing (where sign-up
-happens) shows it as a genuine `$0.00/mo` ongoing plan: 400 API
-units/month, 1,600 requests/month (hard caps), 1,000 requests/hour rate
-limit, no trial language. Given that ambiguity, chose to build the
-caching/fallback architecture generically now and pick the actual
-paid/free provider as a separate follow-up decision, rather than build
-around a specific number that turned out to be uncertain. If AeroDataBox
-is the one eventually chosen: its exact per-request unit cost for a
-callsign lookup wasn't confirmed (endpoints are billed at 1/2/6 units
-depending on tier), so `ROUTE_PROVIDER_MONTHLY_BUDGET` in `config.h`
-should be set conservatively (worst case ~65 requests/month at 6
-units/request) until that's verified against a real account.
+Chose AeroDataBox after resolving conflicting information about its
+RapidAPI "Basic" plan - `aerodatabox.com`'s own pricing page describes it
+as a time-limited 7-day trial, but the actual RapidAPI marketplace listing
+(where sign-up happens) shows it as a genuine `$0.00/mo` ongoing plan: 400
+API units/month, 1,600 requests/month (hard caps), 1,000 requests/hour
+rate limit, no trial language. Its exact per-request unit cost for a
+callsign lookup was never confirmed (endpoints are billed at 1/2/6 units
+depending on tier), so `ROUTE_PROVIDER_MONTHLY_BUDGET` in `config.h` is
+set conservatively to 60 (safe margin under the worst case, ~65
+requests/month at 6 units/request) until the real cost is confirmed from
+RapidAPI's usage dashboard.
 
-Design notes for whoever wires in a real provider:
+**Full API reference**: https://doc.aerodatabox.com/ (interactive
+OpenAPI/Swagger docs - "Open" under any of the direct/RapidAPI/API.market
+deployment options to see the full request/response schema and every
+field this endpoint can return, including several this project doesn't
+currently use: `aircraft.{reg,modeS,model}`, `terminal`/`gate`/`runway`,
+`status`, `codeshareStatus`, `isCargo`, `greatCircleDistance`,
+`lastUpdatedUtc`, per-field `quality` flags). Also viewable directly on
+the RapidAPI listing: https://rapidapi.com/aedbx-aedbx/api/aerodatabox
+
+`ROUTE_PROVIDER_MIN_INTERVAL_MS` was originally set to ~3.7s to respect
+the 1,000/hour cap on its own - but since it's checked inline in
+`FlightSelector::enrich()`'s tight per-flight loop, a poll cycle with
+several distinct flagged callsigns needing a fresh lookup only ever got
+the first one through; the rest silently kept showing adsbdb's flagged/
+stale route, one at a time, one per ~30s poll (confirmed live: three
+simultaneously-genuinely-stale flights - each correctly flagged, since
+their claimed route was nowhere near the aircraft's actual live position
+- stayed stuck this way). The monthly budget (60) already caps total
+volume far below anything the hourly limit could bind on regardless of
+burst timing, so the interval was narrowed to 500ms (just enough to avoid
+firing requests literally simultaneously) rather than trying to pace
+against an hourly cap that's already a non-issue.
+
+**Field names confirmed against real live responses on 2026-09-15/16**
+(captured via `DEBUG`'s raw-JSON dump in `AeroDataBoxClient.cpp`'s
+`fetchOnce()`): `departure`/`arrival`.`airport`.`iata`/`icao`/`location`.
+`lat`/`lon`, top-level `airline`.`name`/`iata`/`icao`. The response is a
+JSON array, one element per scheduled leg for that callsign that day -
+confirmed multi-leg in practice (a tracked `UAL1283` returned two
+elements the same day, `DEN->EWR` then `EWR->LAS`), which
+`RouteCache::pickActiveLeg()` resolves to the currently-active one exactly
+as designed. Two corrections versus the original pre-hardware assumptions:
+- The airport object *does* carry `location.lat`/`lon`, so
+  `RouteLeg::haveOriginCoords`/`haveDestCoords` are populated from it when
+  present, not always left false.
+- A movement's actual/estimated time isn't always one of
+  `runwayTime`/`revisedTime`/`scheduledTime` - a smaller/less-tracked
+  operator's arrival came back with *only* `predictedTime` set (none of
+  the other three present at all). `AeroDataBoxClient.cpp`'s `pickTime()`
+  originally didn't check that key at all (based on other live examples
+  that happened to also carry `revisedTime`), which silently left
+  `depUtc`/`arrUtc` at 0 for that callsign - caught by comparing the raw
+  JSON dump against the parsed result live, not by build/inspection.
+  Fixed by adding `predictedTime` to the priority list
+  (`runwayTime` -> `revisedTime` -> `predictedTime` -> `scheduledTime`).
+
+Design notes:
 - **Cache key is the callsign, not the tail number (ICAO24)** - a tail
   number is reused by the same aircraft across many different city-pair
   legs in a day, so keying by it would be actively wrong. A callsign
@@ -228,15 +270,52 @@ Design notes for whoever wires in a real provider:
   temporary synthetic test on hardware (single-leg, multi-leg-in-window,
   and between-legs-nearest-fallback cases, all passed) before removing
   the test scaffolding.
-- `RouteLeg` (see `RouteProvider.h`) carries no airline name - only a
-  real provider's response will determine whether one is available. Until
-  then, if adsbdb has no route at all for a callsign, a successful
-  `RouteCache` fallback still won't make that flight render as
-  "commercial" (`Flight::isCommercial()` checks `airline[0]`) - only the
-  flagged-but-present-route case gets the full benefit today.
+- `RouteLeg` (see `RouteProvider.h`) now carries `airline`/`airlineCode`,
+  populated from AeroDataBox's response. `FlightSelector::enrich()` copies
+  these into `Flight::airline`/`airlineCode` on a successful `RouteCache`
+  fallback, so a callsign with *no* adsbdb route at all now renders as
+  "commercial" (`Flight::isCommercial()` checks `airline[0]`) whenever
+  AeroDataBox supplied an airline for it - closing the gap the previous
+  no-op stub left open.
 - The request budget is tracked in NVS (`Preferences`, namespace
   `"route"`), mirroring the soak-counter pattern in `main.cpp`, so it
   survives the scheduled self-reboot instead of resetting mid-month.
+- **Aged-out legs trigger a re-check, rate-limited per callsign.** If
+  every leg `RouteCache` has cached for a callsign today has already
+  arrived (past `ROUTE_CACHE_STALE_GRACE_SEC`, 10 min) with nothing else
+  active or upcoming, `RouteCache::lookupActiveLeg()` re-queries the
+  provider rather than keep serving arrived data for the rest of the day -
+  a new leg may have since appeared. Capped at once per callsign per
+  `ROUTE_CACHE_MIN_REFETCH_INTERVAL_MS` (15 min, distinct from
+  `ROUTE_PROVIDER_MIN_INTERVAL_MS`'s *global* inter-request spacing) so a
+  callsign with genuinely nothing new doesn't get re-queried every ~30s
+  poll. A callsign whose leg has no known arrival time at all
+  (`arrUtc == 0`) is never considered aged-out this way - unchanged from
+  the original once-per-day-if-nothing-found behavior.
+- **Departure/arrival timeline row.** When a commercial flight ends up
+  with both `depUtc`/`arrUtc` non-zero, `Renderer` draws a third row:
+  local time (`H:mm`, `HOME_TZ_POSIX`) left-justified, dashes, a `+` at
+  the current-time position between the two, local arrival time
+  right-justified (`TIMELINE_WIDTH_CHARS` in `config.h`, 38 - live-
+  verified the `+` marker visibly advances every `REDRAW_SECONDS` tick,
+  not just on a real poll, and survives correctly across a real-poll
+  boundary too). adsbdb itself has no time fields at all (it's a static
+  route table, not a live tracker) - `depUtc`/`arrUtc` come from one of
+  two sources, real-vs-estimated indistinguishable in the row's rendering
+  today:
+  - **Real times**, from `RouteCache`/`AeroDataBoxClient`, whenever the
+    fallback path resolves a leg (see above).
+  - **Calculated estimates**, ported verbatim from the desktop
+    `nearby_flights.py`'s "calculated" fallback
+    (`FlightSelector.cpp`'s `estimateTimes()`): current position/speed
+    plus adsbdb's origin/destination coordinates - distance already
+    covered / current speed estimates elapsed time since takeoff;
+    distance remaining / current speed estimates time to arrival. Only
+    computed airborne with a nonzero speed (distance/speed is meaningless
+    at a dead stop), and only for whichever half has a known coordinate.
+    This is what makes the row appear for the common case (a plausible
+    adsbdb route, which never goes through `RouteCache` at all) - live-
+    verified computing sane epoch values for real in-flight aircraft.
 
 ## Known simplification: TARGET_CALLSIGNS
 

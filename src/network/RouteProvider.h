@@ -5,13 +5,12 @@
 // Abstract interface for a secondary (paid or free) flight-route data
 // source, consulted by FlightSelector::enrich() only when adsbdb has no
 // route or FlightMath::routeIsPlausible() flags its route as suspect.
-// Deliberately provider-agnostic: which concrete API to use (AeroDataBox,
-// FlightAware AeroAPI, or another) is an open follow-up decision - see the
-// README's "Secondary route provider" section. There is exactly one
-// definition of fetchRouteLegs() linked into the build at a time
-// (currently NullRouteProvider.cpp, a no-op stub) - switching providers
-// means swapping which .cpp file implements this function, not runtime
-// polymorphism.
+// Deliberately provider-agnostic: which concrete API to use is a decision
+// made per .cpp file, not runtime polymorphism - see the README's
+// "Secondary route provider" section. There is exactly one definition of
+// fetchRouteLegs() linked into the build at a time - currently
+// AeroDataBoxClient.cpp (via RapidAPI) - switching providers means
+// swapping which .cpp file implements this function.
 
 // One scheduled leg (city pair + times) for a callsign on a given day. A
 // callsign can have more than one of these in a day - see RouteCache's
@@ -25,6 +24,10 @@ struct RouteLeg {
     float destLat = 0, destLon = 0;
     time_t depUtc = 0;  // scheduled departure, UTC epoch, 0 if unknown
     time_t arrUtc = 0;  // scheduled arrival, UTC epoch, 0 if unknown
+    // "" if this provider/leg doesn't supply one (e.g. adsbdb's fallback
+    // path never did, until AeroDataBox - see FlightSelector::enrich()).
+    char airline[24] = "";
+    char airlineCode[8] = "";
 };
 
 // Fills outLegs (up to maxLegs) with every leg this callsign is scheduled
