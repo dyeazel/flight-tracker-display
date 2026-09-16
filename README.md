@@ -196,12 +196,24 @@ RapidAPI "Basic" plan - `aerodatabox.com`'s own pricing page describes it
 as a time-limited 7-day trial, but the actual RapidAPI marketplace listing
 (where sign-up happens) shows it as a genuine `$0.00/mo` ongoing plan: 400
 API units/month, 1,600 requests/month (hard caps), 1,000 requests/hour
-rate limit, no trial language. Its exact per-request unit cost for a
-callsign lookup was never confirmed (endpoints are billed at 1/2/6 units
-depending on tier), so `ROUTE_PROVIDER_MONTHLY_BUDGET` in `config.h` is
-set conservatively to 60 (safe margin under the worst case, ~65
-requests/month at 6 units/request) until the real cost is confirmed from
-RapidAPI's usage dashboard.
+rate limit, no trial language.
+
+The real per-request cost was initially unconfirmed, so
+`ROUTE_PROVIDER_MONTHLY_BUDGET` started at a conservative 60 (worst case
+~65 requests/month at an assumed 6 units/request). That budget being hit
+in a single day of active *development* testing (not steady-state use)
+silently blocked every new/uncached callsign from resolving via
+`RouteCache` - diagnosed live on 2026-09-16 by reading RapidAPI's own
+response headers (there's no separate usage dashboard; the numbers ride
+along on every response): `x-ratelimit-requests-remaining` vs.
+`x-ratelimit-api-units-remaining` showed the real cost is ~1.7
+units/request, not 6. Recalibrated to 150 (safe margin under the ~200
+requests/month that rate actually supports). Also noted but not fixed:
+those headers' `x-ratelimit-api-units-reset` showed AeroDataBox's quota
+resets on a rolling ~30-day window from account creation, not the
+calendar-month boundary `RouteCache.cpp`'s `budgetAllows()` currently
+assumes (`localDay / 100`) - low-stakes with the new headroom, but worth
+an exact fix (track the real reset epoch) if this ever gets tight again.
 
 **Full API reference**: https://doc.aerodatabox.com/ (interactive
 OpenAPI/Swagger docs - "Open" under any of the direct/RapidAPI/API.market

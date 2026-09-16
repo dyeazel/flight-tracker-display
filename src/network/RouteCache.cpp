@@ -144,6 +144,12 @@ bool lookupActiveLeg(const char *callsign, RouteLeg *out) {
     uint32_t today = TimeSync::currentLocalDay();
     time_t now = TimeSync::nowUtc();
 
+    if (DEBUG) {
+        loadBudget();
+        Serial.printf("[routecache] %s budgetMonth=%u budgetCount=%u/%d\n", callsign, budgetMonth,
+                      budgetCount, ROUTE_PROVIDER_MONTHLY_BUDGET);
+    }
+
     CacheEntry *entry = findEntry(callsign);
 
     // Cached for today, but every known leg's arrival (+ grace) has

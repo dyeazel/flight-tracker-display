@@ -94,12 +94,28 @@ extern const char *const CHARTER_OPERATOR_PREFIXES[CHARTER_OPERATOR_PREFIXES_COU
 // and the README's "Secondary route provider" section. Backed by
 // AeroDataBoxClient (via RapidAPI). Its confirmed "Basic" plan (a genuine
 // ongoing free tier, not a trial) caps out at 400 API units / 1,600
-// requests per month and 1,000 requests/hour; the callsign-lookup
-// endpoint's exact per-request unit cost was never confirmed (tiers bill
-// 1/2/6 units), so the monthly budget below assumes the worst case
-// (~65 requests/month at 6 units/request) with a safety margin - raise it
-// once the real per-request cost is confirmed from RapidAPI's usage
-// dashboard after some live calls.
+// requests per month and 1,000 requests/hour.
+//
+// The original budget of 60 assumed a worst-case 6 units/request (tiers
+// bill 1/2/6) - real cost was confirmed 2026-09-16 by reading RapidAPI's
+// own response headers (x-ratelimit-api-units-remaining vs.
+// x-ratelimit-requests-remaining) after live usage: ~1.7 units/request
+// actual, not 6. At that real rate, 400 units supports roughly 200
+// requests/month - 150 leaves a safety margin under that. (That same
+// 60-request budget being hit in a single day of active *development*
+// testing - not steady-state operation - is exactly what exhausted it
+// and caused new/uncached callsigns to silently stop resolving via
+// RouteCache until this was diagnosed live on 2026-09-16.)
+//
+// Separately noted but NOT fixed here: RapidAPI's quota resets on a
+// rolling ~30-day window from account creation
+// (x-ratelimit-api-units-reset was ~2,555,377s, ~29.6 days, when checked)
+// - not the calendar-month boundary budgetAllows() currently assumes
+// (`localDay / 100`). A reset near the calendar month's end could
+// therefore fire a few days early or late relative to RapidAPI's actual
+// billing cycle; low-stakes today since the recalibrated budget has
+// headroom either way, but worth an exact fix (store/track the real
+// reset epoch) if this ever gets tight again.
 //
 // ROUTE_PROVIDER_MIN_INTERVAL_MS was originally set to ~3.7s to respect
 // the 1,000/hour cap on its own - but that's checked inline in enrich()'s
@@ -116,7 +132,7 @@ extern const char *const CHARTER_OPERATOR_PREFIXES[CHARTER_OPERATOR_PREFIXES_COU
 #define ROUTE_CACHE_SIZE 32
 #define ROUTE_CACHE_MAX_LEGS 4
 #define ROUTE_PROVIDER_MIN_INTERVAL_MS 500
-#define ROUTE_PROVIDER_MONTHLY_BUDGET 60
+#define ROUTE_PROVIDER_MONTHLY_BUDGET 150
 
 // A cached leg more than this long past its arrival time (with no other
 // cached leg still upcoming/active) is treated as aged-out - RouteCache
