@@ -120,6 +120,27 @@ void drawTimelineRow(DisplayManager &display, const Flight &f, int x, int y, uin
     display.drawText8x8(x, y, line, color, display.black);
 }
 
+// A full-width line combining the two airport names, left name / " -> " /
+// right name, split evenly across the same TIMELINE_WIDTH_CHARS full-line
+// budget drawTimelineRow() above uses. Falls back to the short code (e.g.
+// "ORD") if a provider didn't supply a name for that airport - see
+// Flight::originName/destinationName - so a flight whose provider only
+// gave codes still shows something here instead of a blank field. Static
+// between real polls (names don't change once resolved for a callsign),
+// so unlike drawValueLine()/drawTimelineRow() this is only ever called
+// from render(), never renderValues() - no dead-reckoning tick needs to
+// redraw it.
+void drawAirportNamesRow(DisplayManager &display, const Flight &f, int x, int y, uint16_t color) {
+    const int kNameChars = (TIMELINE_WIDTH_CHARS - 4) / 2;  // 4 = " -> "
+    const char *originText = f.originName[0] ? f.originName : f.origin;
+    const char *destText = f.destinationName[0] ? f.destinationName : f.destination;
+
+    char line[TIMELINE_WIDTH_CHARS + 1];
+    snprintf(line, sizeof(line), "%-*.*s -> %-*.*s", kNameChars, kNameChars, originText,
+             kNameChars, kNameChars, destText);
+    display.drawText8x8(x, y, line, color, display.black);
+}
+
 }  // namespace
 
 void render(DisplayManager &display, Flight *flights, int count, char missing[][12],
@@ -179,6 +200,11 @@ void render(DisplayManager &display, Flight *flights, int count, char missing[][
         f.valueColor = statusColor;
         drawValueLine(display, f, VALUE_X, y, statusColor);
         y += 12;
+
+        if (isCommercial && (f.origin[0] || f.destination[0])) {
+            drawAirportNamesRow(display, f, 4, y, display.gray);
+            y += 12;
+        }
 
         if (isCommercial && f.depUtc != 0 && f.arrUtc != 0 && f.arrUtc > f.depUtc) {
             f.timelineY = y;

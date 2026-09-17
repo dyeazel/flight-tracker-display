@@ -11,6 +11,8 @@ struct RouteInfo {
     char airlineCode[8] = "";
     char originCode[8] = "";
     char destinationCode[8] = "";
+    char originName[40] = "";
+    char destinationName[40] = "";
     bool haveOriginCoords = false;
     float originLat = 0, originLon = 0;
     bool haveDestCoords = false;

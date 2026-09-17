@@ -35,6 +35,8 @@ struct Flight {
     char airlineCode[8] = "";
     char origin[8] = "";       // may carry ROUTE_FLAG '*' suffix
     char destination[8] = "";  // may carry ROUTE_FLAG '*' suffix
+    char originName[40] = "";       // "" if the provider didn't supply one
+    char destinationName[40] = "";  // "" if the provider didn't supply one
 
     // Scheduled departure/arrival, UTC epoch, 0 if unknown - only ever
     // populated from the secondary route provider (RouteCache/

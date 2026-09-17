@@ -15,13 +15,18 @@ namespace {
 // Confirmed against a real live response (2026-09-16): the airport object
 // does carry a "location":{"lat":...,"lon":...} sub-object, contrary to
 // the pre-hardware assumption in AeroDataBoxClient.h - populate it.
-void copyAirport(char *codeDst, size_t codeSize, bool *haveCoords, float *lat, float *lon,
-                  JsonVariant airport) {
+//
+// nameDst/nameSize: the airport's short human name, if present - "name"
+// confirmed against a live payload 2026-09-17 (see AeroDataBoxClient.h).
+void copyAirport(char *codeDst, size_t codeSize, char *nameDst, size_t nameSize, bool *haveCoords,
+                  float *lat, float *lon, JsonVariant airport) {
     if (airport.isNull()) return;
     const char *iata = airport["iata"] | "";
     const char *icao = airport["icao"] | "";
     strncpy(codeDst, (*iata ? iata : icao), codeSize - 1);
     codeDst[codeSize - 1] = '\0';
+    strncpy(nameDst, airport["name"] | "", nameSize - 1);
+    nameDst[nameSize - 1] = '\0';
 
     JsonVariant loc = airport["location"];
     if (!loc["lat"].isNull() && !loc["lon"].isNull()) {
@@ -62,10 +67,11 @@ bool parseElement(JsonVariant el, RouteLeg *leg) {
     *leg = RouteLeg();
     JsonVariant departure = el["departure"];
     JsonVariant arrival = el["arrival"];
-    copyAirport(leg->originCode, sizeof(leg->originCode), &leg->haveOriginCoords, &leg->originLat,
-                &leg->originLon, departure["airport"]);
-    copyAirport(leg->destinationCode, sizeof(leg->destinationCode), &leg->haveDestCoords,
-                &leg->destLat, &leg->destLon, arrival["airport"]);
+    copyAirport(leg->originCode, sizeof(leg->originCode), leg->originName, sizeof(leg->originName),
+                &leg->haveOriginCoords, &leg->originLat, &leg->originLon, departure["airport"]);
+    copyAirport(leg->destinationCode, sizeof(leg->destinationCode), leg->destinationName,
+                sizeof(leg->destinationName), &leg->haveDestCoords, &leg->destLat, &leg->destLon,
+                arrival["airport"]);
     leg->depUtc = pickTime(departure);
     leg->arrUtc = pickTime(arrival);
 

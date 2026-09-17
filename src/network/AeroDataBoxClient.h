@@ -19,3 +19,10 @@
 // the airport object DOES carry location.lat/lon, so
 // RouteLeg::haveOriginCoords/haveDestCoords are populated when present,
 // not always left false.
+//
+// departure/arrival.airport.name (added to feed the display's new
+// airport-names row) confirmed 2026-09-17 via a direct live request
+// (UAL2114, ORD->LAX): airport.name is a short human name ("Chicago
+// O'Hare", "Los Angeles" - no "International Airport" suffix), distinct
+// from the also-present airport.shortName (near-identical or even shorter,
+// e.g. "O'Hare"). copyAirport() uses "name".

@@ -109,6 +109,10 @@ bool enrich(Flight *flights, int count) {
                 f.origin[sizeof(f.origin) - 1] = '\0';
                 strncpy(f.destination, leg.destinationCode, sizeof(f.destination) - 1);
                 f.destination[sizeof(f.destination) - 1] = '\0';
+                strncpy(f.originName, leg.originName, sizeof(f.originName) - 1);
+                f.originName[sizeof(f.originName) - 1] = '\0';
+                strncpy(f.destinationName, leg.destinationName, sizeof(f.destinationName) - 1);
+                f.destinationName[sizeof(f.destinationName) - 1] = '\0';
                 // If adsbdb had no route at all, this is also what makes
                 // the flight render as "commercial" (Flight::isCommercial()
                 // checks airline[0]) - only populated if AeroDataBox's
@@ -130,6 +134,8 @@ bool enrich(Flight *flights, int count) {
         strncpy(f.airlineCode, info.airlineCode, sizeof(f.airlineCode) - 1);
         strncpy(f.origin, info.originCode, sizeof(f.origin) - 1);
         strncpy(f.destination, info.destinationCode, sizeof(f.destination) - 1);
+        strncpy(f.originName, info.originName, sizeof(f.originName) - 1);
+        strncpy(f.destinationName, info.destinationName, sizeof(f.destinationName) - 1);
         estimateTimes(f, info);
         if (DEBUG) {
             Serial.printf("[enrich] %s calculated depUtc=%ld arrUtc=%ld onGround=%d speedKt=%.1f\n",
