@@ -9,6 +9,7 @@
 #include "config.h"
 #include "secrets.h"
 #include "time/Iso8601.h"
+#include "util/Ascii.h"
 
 namespace {
 
@@ -27,6 +28,7 @@ void copyAirport(char *codeDst, size_t codeSize, char *nameDst, size_t nameSize,
     codeDst[codeSize - 1] = '\0';
     strncpy(nameDst, airport["name"] | "", nameSize - 1);
     nameDst[nameSize - 1] = '\0';
+    Ascii::sanitize(nameDst);
 
     JsonVariant loc = airport["location"];
     if (!loc["lat"].isNull() && !loc["lon"].isNull()) {
@@ -78,6 +80,7 @@ bool parseElement(JsonVariant el, RouteLeg *leg) {
     JsonVariant airline = el["airline"];
     if (!airline.isNull()) {
         strncpy(leg->airline, airline["name"] | "", sizeof(leg->airline) - 1);
+        Ascii::sanitize(leg->airline);
         const char *iata = airline["iata"] | "";
         const char *icao = airline["icao"] | "";
         strncpy(leg->airlineCode, (*iata ? iata : icao), sizeof(leg->airlineCode) - 1);
