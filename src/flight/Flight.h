@@ -10,6 +10,7 @@
 // array this is stored in.
 struct Flight {
     char callsign[12] = "";
+    char icao24[8] = "";  // 24-bit transponder address, hex - OpenSky's track/all key
 
     // Current position/altitude - live OpenSky value right after a real
     // fetch, dead-reckoned (extrapolated) from the fix below in between.
@@ -37,6 +38,12 @@ struct Flight {
     char destination[8] = "";  // may carry ROUTE_FLAG '*' suffix
     char originName[40] = "";       // "" if the provider didn't supply one
     char destinationName[40] = "";  // "" if the provider didn't supply one
+
+    // Set fresh each poll by DestinationVerifier - true only when this
+    // poll's destination came from an unconfirmed low+descending guess
+    // (not yet landed), so Renderer can show it distinctly (e.g. yellow)
+    // from a normal or landed-confirmed value.
+    bool destinationGuessed = false;
 
     // Scheduled departure/arrival, UTC epoch, 0 if unknown - only ever
     // populated from the secondary route provider (RouteCache/

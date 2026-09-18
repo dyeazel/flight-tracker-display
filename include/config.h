@@ -47,6 +47,7 @@ extern const char *const TARGET_CALLSIGNS[];
 // ---- Network endpoints ----
 #define OPENSKY_HOST "opensky-network.org"
 #define OPENSKY_PATH "/api/states/all"
+#define OPENSKY_TRACKS_PATH "/api/tracks/all"
 #define OPENSKY_TOKEN_URL "https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token"
 #define ADSBDB_URL_FMT "https://api.adsbdb.com/v0/callsign/%s"
 #define USER_AGENT "Mozilla/5.0 (compatible; cyd_nearby_flights_arduino/1.0)"
@@ -144,6 +145,72 @@ extern const char *const CHARTER_OPERATOR_PREFIXES[CHARTER_OPERATOR_PREFIXES_COU
 // global inter-request spacing.
 #define ROUTE_CACHE_STALE_GRACE_SEC (10UL * 60UL)
 #define ROUTE_CACHE_MIN_REFETCH_INTERVAL_MS (15UL * 60UL * 1000UL)
+
+// ---- Departure verification (OpenSky live track vs. claimed origin) ----
+// A last-resort check for a flight whose route already looks suspect (see
+// FlightMath::routeIsPlausible()) and that RouteCache/AeroDataBox couldn't
+// resolve: fetch the aircraft's actual live track from OpenSky and compare
+// its first waypoint (real evidence of where it started, per OpenSky's own
+// docs - see OpenSkyClient::fetchLiveTrackFirstPoint()) against the
+// claimed origin's coordinates. If they disagree, reverse-lookup the
+// static AirportTable for the real nearest airport and correct
+// Flight::origin/originName to it - see DepartureVerifier.
+//
+// Kill switch: OpenSky's own docs call /tracks "purely experimental" and
+// warn it "can be out of order at any time" - flip this off if that ever
+// causes trouble in the field without wanting to touch the rest of the
+// route-lookup pipeline.
+#define VERIFY_DEPARTURE_VIA_TRACK true
+
+// Unlike AeroDataBox, OpenSky bills /tracks/* against its own credit
+// bucket entirely separate from /states/* (confirmed via their docs' "API
+// Credits" section: three independent buckets, one per endpoint group) -
+// so this doesn't compete with the states/all polling budget at all, and
+// needs no analogous monthly cap. Still worth a minimum spacing between
+// calls, for the exact same reason ROUTE_PROVIDER_MIN_INTERVAL_MS exists:
+// enrich() can flag several distinct callsigns as suspect in one poll
+// cycle, and firing this back-to-back for cache misses in a tight loop
+// would be needlessly bursty.
+#define TRACK_PROVIDER_MIN_INTERVAL_MS 500
+
+// How close (in miles) the track's first waypoint must be to a coordinate
+// to call it "the same airport" - used both to decide the claimed origin
+// is already correct (no lookup needed) and to accept an AirportTable
+// match as the correction. Loose enough to cover a few miles of climb-out
+// drift past the runway; tight enough to still usually distinguish
+// close-together airports in the same metro area (not guaranteed in
+// unusually dense multi-airport metros - a known, accepted limitation of
+// this coarse a check).
+#define DEPARTURE_VERIFY_MATCH_RADIUS_MI 15.0f
+
+// Per-callsign-per-day cache so an already-resolved verification (whether
+// confirmed correct or corrected) isn't re-fetched from OpenSky on every
+// ~30s poll for the rest of that flight - mirrors RouteCache's per-day
+// caching rationale, just without the multi-leg complexity that needs.
+#define DEPARTURE_VERIFY_CACHE_SIZE 16
+
+// ---- Destination verification (position/altitude vs. claimed arrival) ----
+// Unlike departure verification, this needs no network call at all - every
+// input (current lat/lon/altitude/vertical rate/on-ground state) is
+// already fetched every poll, and the claimed destination's own
+// coordinates/elevation come from the same static AirportTable
+// DepartureVerifier uses. See DestinationVerifier.
+//
+// A flight already on the ground: its current position IS the landing
+// position, a settled fact - if that's far from the claimed destination,
+// correct it via AirportTable::findNearest() on the current position.
+#define DESTINATION_MATCH_RADIUS_MI 15.0f
+
+// A still-airborne flight below this height above the airport's OWN field
+// elevation (not sea level - see AirportEntry::elevationFt) while
+// descending (same ALT_TREND_THRESHOLD_FPM used for the on-screen
+// climb/descend icon) is very likely on final approach into it - a guess,
+// not a settled fact (a go-around/hold could still happen), so a
+// correction made this way should render as unconfirmed (see
+// Flight::destinationGuessed) rather than being treated like a landed
+// correction.
+#define DESCENT_GUESS_MAX_AGL_FT 5000.0f
+#define DESCENT_GUESS_MAX_RADIUS_MI 20.0f
 
 // ---- Departure/arrival timeline row ----
 // Rendered as a fixed-width text bar for a commercial flight with known

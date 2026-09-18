@@ -130,15 +130,18 @@ void drawTimelineRow(DisplayManager &display, const Flight &f, int x, int y, uin
 // so unlike drawValueLine()/drawTimelineRow() this is only ever called
 // from render(), never renderValues() - no dead-reckoning tick needs to
 // redraw it.
-void drawAirportNamesRow(DisplayManager &display, const Flight &f, int x, int y, uint16_t color) {
+void drawAirportNamesRow(DisplayManager &display, const Flight &f, int x, int y,
+                          uint16_t originColor, uint16_t destColor) {
     const int kNameChars = (TIMELINE_WIDTH_CHARS - 4) / 2;  // 4 = " -> "
     const char *originText = f.originName[0] ? f.originName : f.origin;
     const char *destText = f.destinationName[0] ? f.destinationName : f.destination;
 
-    char line[TIMELINE_WIDTH_CHARS + 1];
-    snprintf(line, sizeof(line), "%-*.*s -> %-*.*s", kNameChars, kNameChars, originText,
-             kNameChars, kNameChars, destText);
-    display.drawText8x8(x, y, line, color, display.black);
+    char originField[24], destField[20];
+    snprintf(originField, sizeof(originField), "%-*.*s -> ", kNameChars, kNameChars, originText);
+    snprintf(destField, sizeof(destField), "%-*.*s", kNameChars, kNameChars, destText);
+
+    display.drawText8x8(x, y, originField, originColor, display.black);
+    display.drawText8x8(x + (int)strlen(originField) * 8, y, destField, destColor, display.black);
 }
 
 }  // namespace
@@ -171,6 +174,24 @@ void render(DisplayManager &display, Flight *flights, int count, char missing[][
         uint16_t statusColor = f.onGround ? display.gray : display.green;
         bool isCommercial = f.isCommercial();
 
+        // Origin/destination each get their own color, independent of one
+        // another: red if that specific field still carries ROUTE_FLAG
+        // (unresolved/suspect), yellow if DestinationVerifier corrected it
+        // via an unconfirmed low+descending guess (Flight::
+        // destinationGuessed - see config.h's "Destination verification"),
+        // gray otherwise. Used for both the route-codes line below and
+        // drawAirportNamesRow().
+        uint16_t originColor = display.gray;
+        uint16_t destColor = display.gray;
+        if (isCommercial) {
+            if (strstr(f.origin, ROUTE_FLAG)) originColor = display.red;
+            if (f.destinationGuessed) {
+                destColor = display.yellow;
+            } else if (strstr(f.destination, ROUTE_FLAG)) {
+                destColor = display.red;
+            }
+        }
+
         if (isCommercial) {
             // is_scheduled_callsign() (checked upstream in enrich()) already
             // confirmed callsign[:3] is the airline prefix and callsign[3:]
@@ -180,14 +201,17 @@ void render(DisplayManager &display, Flight *flights, int count, char missing[][
             display.drawText8x8(4, y, line1, display.white, display.black);
             y += 9;
             if (f.origin[0] || f.destination[0]) {
-                char routeRaw[24], routeField[24];
-                snprintf(routeRaw, sizeof(routeRaw), "%s->%s", f.origin[0] ? f.origin : "?",
-                          f.destination[0] ? f.destination : "?");
-                snprintf(routeField, sizeof(routeField), "%-*.*s", CALLSIGN_COL_CHARS,
-                          CALLSIGN_COL_CHARS, routeRaw);
-                bool flagged = strstr(f.origin, ROUTE_FLAG) || strstr(f.destination, ROUTE_FLAG);
-                display.drawText8x8(4, y, routeField, flagged ? display.red : display.gray,
-                                     display.black);
+                const char *originText = f.origin[0] ? f.origin : "?";
+                const char *destText = f.destination[0] ? f.destination : "?";
+                char part1[16];
+                snprintf(part1, sizeof(part1), "%s->", originText);
+                int part1Len = (int)strlen(part1);
+                int destWidth = CALLSIGN_COL_CHARS - part1Len;
+                if (destWidth < 0) destWidth = 0;
+                char part2[16];
+                snprintf(part2, sizeof(part2), "%-*.*s", destWidth, destWidth, destText);
+                display.drawText8x8(4, y, part1, originColor, display.black);
+                display.drawText8x8(4 + part1Len * 8, y, part2, destColor, display.black);
             }
         } else {
             char callsignField[16];
@@ -202,7 +226,7 @@ void render(DisplayManager &display, Flight *flights, int count, char missing[][
         y += 12;
 
         if (isCommercial && (f.origin[0] || f.destination[0])) {
-            drawAirportNamesRow(display, f, 4, y, display.gray);
+            drawAirportNamesRow(display, f, 4, y, originColor, destColor);
             y += 12;
         }
 

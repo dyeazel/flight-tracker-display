@@ -5,9 +5,11 @@
 
 #include <Arduino.h>
 
+#include "DestinationVerifier.h"
 #include "FlightMath.h"
 #include "config.h"
 #include "network/AdsbdbClient.h"
+#include "network/DepartureVerifier.h"
 #include "network/RouteCache.h"
 #include "time/TimeSync.h"
 
@@ -40,6 +42,16 @@ void estimateTimes(Flight &f, const AdsbdbClient::RouteInfo &info) {
         float hoursRemaining = distRemaining / speedMph;
         f.arrUtc = now + (time_t)(hoursRemaining * 3600.0f);
     }
+}
+
+// Logs only when DestinationVerifier actually changed something (beforeCode
+// differs from f.destination after the call) - most calls are no-ops
+// (cruising, already matches), so this keeps [destination] lines rare and
+// meaningful rather than printing every poll for every commercial flight.
+void debugLogDestinationChange(const Flight &f, const char beforeCode[8]) {
+    if (!DEBUG || strcmp(beforeCode, f.destination) == 0) return;
+    Serial.printf("[destination] %s %s -> %s(%s)\n", f.callsign,
+                  f.destinationGuessed ? "guessed" : "confirmed", f.destination, f.destinationName);
 }
 
 }  // namespace
@@ -125,6 +137,10 @@ bool enrich(Flight *flights, int count) {
                 }
                 f.depUtc = leg.depUtc;
                 f.arrUtc = leg.arrUtc;
+                char beforeDest[8];
+                strncpy(beforeDest, f.destination, sizeof(beforeDest));
+                DestinationVerifier::verifyOrCorrectDestination(f);
+                debugLogDestinationChange(f, beforeDest);
                 continue;
             }
         }
@@ -144,11 +160,23 @@ bool enrich(Flight *flights, int count) {
 
         if (!plausible) {
             anyFlagged = true;
-            if (f.origin[0]) strncat(f.origin, ROUTE_FLAG, sizeof(f.origin) - strlen(f.origin) - 1);
+            bool originVerified = DepartureVerifier::verifyOrCorrectOrigin(
+                f, info.originLat, info.originLon, info.haveOriginCoords);
+            if (DEBUG && originVerified) {
+                Serial.printf("[departure] %s verified/corrected origin=%s(%s)\n", f.callsign,
+                              f.origin, f.originName);
+            }
+            if (f.origin[0] && !originVerified) {
+                strncat(f.origin, ROUTE_FLAG, sizeof(f.origin) - strlen(f.origin) - 1);
+            }
             if (f.destination[0]) {
                 strncat(f.destination, ROUTE_FLAG, sizeof(f.destination) - strlen(f.destination) - 1);
             }
         }
+        char beforeDest[8];
+        strncpy(beforeDest, f.destination, sizeof(beforeDest));
+        DestinationVerifier::verifyOrCorrectDestination(f);
+        debugLogDestinationChange(f, beforeDest);
     }
     return anyFlagged;
 }

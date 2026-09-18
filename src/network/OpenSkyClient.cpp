@@ -167,6 +167,7 @@ static int fetchOnce(const char *path, const char *token, float radiusMi, Flight
             JsonArray states = doc["states"].as<JsonArray>();
             for (JsonArray s : states) {
                 if (s.size() < 12) continue;
+                const char *icao24 = s[0].isNull() ? "" : s[0].as<const char *>();
                 const char *callsign = s[1].isNull() ? "" : s[1].as<const char *>();
                 if (s[5].isNull() || s[6].isNull()) continue;  // no lon/lat
                 float lon = s[5].as<float>();
@@ -190,6 +191,7 @@ static int fetchOnce(const char *path, const char *token, float radiusMi, Flight
                 char *end = start + strlen(start);
                 while (end > start && *(end - 1) == ' ') *(--end) = '\0';
                 strncpy(f.callsign, (*start ? start : "N/A"), sizeof(f.callsign) - 1);
+                strncpy(f.icao24, icao24, sizeof(f.icao24) - 1);
 
                 int altFt = baroAlt ? (int)(baroAlt * 3.28084f) : 0;
                 f.lat = lat;
@@ -251,6 +253,63 @@ int fetchNearby(float radiusMi, Flight *outFlights, int maxOut) {
     }
     if (code != 200) return -1;
     return count;
+}
+
+bool fetchLiveTrackFirstPoint(const char *icao24, float *outLat, float *outLon) {
+    if (!icao24 || !icao24[0]) return false;
+
+    static unsigned long lastTrackCallMs = 0;
+    unsigned long nowMs = millis();
+    if (lastTrackCallMs != 0 && nowMs - lastTrackCallMs < TRACK_PROVIDER_MIN_INTERVAL_MS) {
+        return false;
+    }
+    lastTrackCallMs = nowMs;
+
+    if (!getToken(tokenScratch, kTokenBufSize)) return false;
+
+    WiFiClientSecure client;
+    client.setInsecure();
+    client.setTimeout(15);
+    HTTPClient http;
+    http.setConnectTimeout(15000);
+    http.setTimeout(15000);
+
+    // Static - see fetchOnce()'s comment on why buffers here must not be
+    // stack-local (mbedTLS's own handshake call chain).
+    static char url[160];
+    snprintf(url, sizeof(url), "https://%s%s?icao24=%s&time=0", OPENSKY_HOST, OPENSKY_TRACKS_PATH,
+              icao24);
+    if (!http.begin(client, url)) return false;
+
+    static char authHeader[kTokenBufSize + 16];
+    snprintf(authHeader, sizeof(authHeader), "Bearer %s", tokenScratch);
+    http.addHeader("Authorization", authHeader);
+
+    int code = http.GET();
+    bool ok = false;
+    if (code == 200) {
+        // Buffered String, not http.getStream() directly - same chunked-
+        // response precaution as fetchOnce()/AeroDataBoxClient.
+        String raw = http.getString();
+        JsonDocument doc;
+        DeserializationError err = deserializeJson(doc, raw);
+        if (!err) {
+            JsonArray path = doc["path"].as<JsonArray>();
+            if (path.size() > 0) {
+                JsonArray first = path[0].as<JsonArray>();
+                // Index 1 = latitude, 2 = longitude - see OpenSky's /tracks
+                // waypoint schema (time, lat, lon, baro_altitude,
+                // true_track, on_ground).
+                if (first.size() >= 3 && !first[1].isNull() && !first[2].isNull()) {
+                    *outLat = first[1].as<float>();
+                    *outLon = first[2].as<float>();
+                    ok = true;
+                }
+            }
+        }
+    }
+    http.end();
+    return ok;
 }
 
 const char *lastErrorMessage() { return lastError; }
