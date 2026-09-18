@@ -13,8 +13,10 @@ namespace Ascii {
 // en dashes or names like "Malaga"/"Dusseldorf") are transliterated to a
 // plain ASCII equivalent; anything else non-ASCII is dropped whole (never
 // leaves a stray continuation byte behind, which would itself render as
-// a garbage glyph). Output is always <= input length, so this is safe to
-// run in place on the same buffer it's given.
+// a garbage glyph). Also shrinks "International" to "Int'l", so more of a
+// long name survives the display's tight per-name truncation before being
+// cut off. Output is always <= input length, so this is safe to run in
+// place on the same buffer it's given.
 void sanitize(char *s);
 
 }  // namespace Ascii

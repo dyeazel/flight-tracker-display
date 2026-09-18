@@ -27,6 +27,10 @@ def to_ascii(s):
     s = "".join(c for c in s if unicodedata.category(c) != "Mn")
     s = "".join(c for c in s if 32 <= ord(c) <= 126)
     s = " ".join(s.split())
+    # Shrinks a common, verbose word so more of a long name survives the
+    # display's tight per-name truncation - matches util/Ascii.cpp's
+    # runtime equivalent for live API text.
+    s = s.replace("International", "Int'l")
     return s
 
 

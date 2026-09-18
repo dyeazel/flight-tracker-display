@@ -1,8 +1,26 @@
 #include "Ascii.h"
 
+#include <string.h>
+
 namespace Ascii {
 
 namespace {
+
+// Replaces every occurrence of `from` with `to` in place, shifting the
+// remainder of the string left to close the gap. Only supports `to` no
+// longer than `from` (true for every use here) - a growing replacement
+// would need more room than the caller's fixed buffer guarantees.
+void replaceAll(char *s, const char *from, const char *to) {
+    size_t fromLen = strlen(from);
+    size_t toLen = strlen(to);
+    char *pos = s;
+    while ((pos = strstr(pos, from)) != nullptr) {
+        memcpy(pos, to, toLen);
+        char *rest = pos + fromLen;
+        memmove(pos + toLen, rest, strlen(rest) + 1);  // +1 for the null terminator
+        pos += toLen;
+    }
+}
 
 // Latin-1 Supplement (U+00C0-U+00FF) stripped to a base ASCII letter -
 // covers accented Latin names ("Malaga", "Dusseldorf", "Sao Paulo",
@@ -79,6 +97,12 @@ void sanitize(char *s) {
         }
     }
     *dst = '\0';
+
+    // Shrinks a common, verbose word so more of the actually-distinguishing
+    // part of a long airport name survives the display's tight per-name
+    // truncation (17 chars - see Renderer's drawAirportNamesRow()) instead
+    // of being cut off mid-word.
+    replaceAll(s, "International", "Int'l");
 }
 
 }  // namespace Ascii
