@@ -13,8 +13,14 @@ extern bool DEBUG;
 // No ESP-IDF task watchdog / WDT_TIMEOUT_MS here - see WatchdogManager.h
 // for why. WDT_FEED_INTERVAL_MS is this module's own stall-check interval.
 #define WDT_FEED_INTERVAL_MS 10000
+// #ifndef-guarded so bench builds can shorten them with -D (see
+// [env:esp32dev-test] in platformio.ini) to force-test the recovery paths.
+#ifndef STALL_RESET_MS
 #define STALL_RESET_MS (5UL * 60UL * 1000UL)
+#endif
+#ifndef SELF_REBOOT_INTERVAL_MS
 #define SELF_REBOOT_INTERVAL_MS (6UL * 60UL * 60UL * 1000UL)
+#endif
 
 // A raw-socket HTTPS fallback (mirroring the MicroPython version's
 // raw_https_get workaround) was planned in case Milestone 3 found
@@ -64,6 +70,11 @@ extern const char *const TARGET_CALLSIGNS[];
 // ---- Plain HTTPS retries (adsbdb, OAuth token endpoint) ----
 #define HTTPS_RETRIES 4
 #define HTTPS_RETRY_DELAY_MS 400
+
+// A single network call slower than this is logged as a [net-t] line even when it succeeds (failures are
+// always logged) - see Diag::FetchTimer. Normal calls take ~1-2 s; ../mlb-board measured one taking 57 s
+// on this same board and network.
+#define SLOW_FETCH_LOG_MS 5000
 
 // ---- Route logic ----
 #define CHARTER_OPERATOR_PREFIXES_COUNT 5

@@ -35,14 +35,14 @@ namespace WatchdogManager {
 namespace {
 hw_timer_t *timer = nullptr;
 volatile unsigned long lastProgressMs = 0;
-unsigned long bootMs = 0;
 
+// Stall detector only. The scheduled self-reboot used to live here too, but
+// esp_restart_noos() cannot record why it restarted or drop WiFi cleanly, so
+// it moved to main.cpp's loop (Diag::reboot). A software reset with no
+// recorded reason is therefore, by construction, this ISR.
 void IRAM_ATTR onTimer() {
     unsigned long now = millis();
     if (lastProgressMs != 0 && (now - lastProgressMs) > STALL_RESET_MS) {
-        esp_restart_noos();
-    }
-    if ((now - bootMs) > SELF_REBOOT_INTERVAL_MS) {
         esp_restart_noos();
     }
 }
@@ -50,7 +50,6 @@ void IRAM_ATTR onTimer() {
 
 void begin() {
     lastProgressMs = millis();
-    bootMs = millis();
 
     // Timer 0, /80 prescaler on the 80MHz APB clock -> 1MHz tick (1us per
     // count), counting up.
@@ -61,15 +60,5 @@ void begin() {
 }
 
 void markProgress() { lastProgressMs = millis(); }
-
-void delayWithProgress(unsigned long totalMs, unsigned long chunkMs) {
-    unsigned long elapsed = 0;
-    while (elapsed < totalMs) {
-        unsigned long step = min(chunkMs, totalMs - elapsed);
-        delay(step);
-        markProgress();
-        elapsed += step;
-    }
-}
 
 }  // namespace WatchdogManager

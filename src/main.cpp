@@ -1,9 +1,9 @@
 #include <Arduino.h>
-#include <Preferences.h>
 #include <WiFi.h>
-#include <esp_system.h>
 
 #include "config.h"
+#include "diag/Diag.h"
+#include "diag/SerialCommands.h"
 #include "display/DisplayManager.h"
 #include "flight/Flight.h"
 #include "flight/FlightMath.h"
@@ -23,59 +23,11 @@ DisplayManager display;
 static Flight flights[MAX_ROWS];
 static char missing[MAX_ROWS][12];
 
-// Milestone 8 soak-test instrumentation. Originally used RTC_DATA_ATTR
-// (RTC "slow memory," which is supposed to survive any reset except a
-// true power-on/brownout) so these counters would accumulate across the
-// whole soak run, not just since the last boot. That didn't hold in
-// practice: a real 9h44m soak run showed these counters reset to zero at
-// the scheduled 6h self-reboot (esp_restart_noos()) even though the
-// reboot itself was clean (SW_CPU_RESET, no panic) - i.e.
-// esp_restart_noos() does not reliably preserve RTC memory here, for
-// reasons not confirmed (no source available for this framework
-// distribution to inspect further). Switched to NVS-backed Preferences
-// instead - genuinely non-volatile flash storage, immune to whatever
-// RTC-domain behavior esp_restart_noos() has, at the cost of a small
-// flash write once per fetch cycle (well within flash wear limits at
-// this cadence).
-Preferences soakPrefs;
-static uint32_t bootCount = 0;
-static uint32_t fetchOkCount = 0;
-static uint32_t fetchFailCount = 0;
-static uint32_t wifiReconnectCount = 0;
-
-static void loadSoakCounters() {
-    soakPrefs.begin("soak", false);
-    bootCount = soakPrefs.getUInt("bootCount", 0) + 1;
-    fetchOkCount = soakPrefs.getUInt("fetchOk", 0);
-    fetchFailCount = soakPrefs.getUInt("fetchFail", 0);
-    wifiReconnectCount = soakPrefs.getUInt("wifiRecon", 0);
-    soakPrefs.putUInt("bootCount", bootCount);
-}
-
-static void saveSoakCounters() {
-    soakPrefs.putUInt("fetchOk", fetchOkCount);
-    soakPrefs.putUInt("fetchFail", fetchFailCount);
-    soakPrefs.putUInt("wifiRecon", wifiReconnectCount);
-}
-
-static const char *resetReasonName(esp_reset_reason_t r) {
-    switch (r) {
-        case ESP_RST_POWERON: return "POWERON";
-        case ESP_RST_SW: return "SW";
-        case ESP_RST_PANIC: return "PANIC";
-        case ESP_RST_INT_WDT: return "INT_WDT";
-        case ESP_RST_TASK_WDT: return "TASK_WDT";
-        case ESP_RST_WDT: return "WDT";
-        case ESP_RST_BROWNOUT: return "BROWNOUT";
-        default: return "OTHER";
-    }
-}
-
 static void logSoakLine() {
     Serial.printf(
         "[soak] t=%lu heap=%u maxAlloc=%u bootCount=%u fetchOk=%u fetchFail=%u wifiReconnects=%u\n",
-        millis(), ESP.getFreeHeap(), ESP.getMaxAllocHeap(), bootCount, fetchOkCount, fetchFailCount,
-        wifiReconnectCount);
+        millis(), ESP.getFreeHeap(), ESP.getMaxAllocHeap(), Diag::bootCount(), Diag::lifetimeOk(),
+        Diag::lifetimeFail(), Diag::lifetimeWifiReconnects());
 }
 
 static void onWifiAttempt(int attempt) {
@@ -90,24 +42,35 @@ static void onWifiAttempt(int attempt) {
 
 static void onWifiProgress() { WatchdogManager::markProgress(); }
 
-// Non-blocking serial 'd'/'D' toggle for DEBUG - mirrors
-// check_debug_toggle()/dprint() in the Python version.
-static void checkDebugToggle() {
-    while (Serial.available()) {
-        char c = Serial.read();
-        if (c == 'd' || c == 'D') {
-            DEBUG = !DEBUG;
-            Serial.println(DEBUG ? "[debug] ON" : "[debug] OFF");
-        }
+// The scheduled self-reboot runs here, in task context, rather than in the
+// watchdog's timer ISR: from the ISR only esp_restart_noos() is safe, which
+// can neither record why we restarted nor drop the WiFi association cleanly
+// (see Diag::reboot). The ISR keeps only the stall detector, so a wedged loop
+// still gets rescued.
+static void checkScheduledReboot() {
+    if (millis() > SELF_REBOOT_INTERVAL_MS) Diag::reboot("scheduled");
+}
+
+// A wait that keeps the watchdog fed, keeps serial commands responsive and
+// still honors the scheduled reboot.
+static void waitServicing(unsigned long totalMs) {
+    unsigned long elapsed = 0;
+    while (elapsed < totalMs) {
+        unsigned long step = min((unsigned long)REDRAW_SECONDS * 1000UL, totalMs - elapsed);
+        delay(step);
+        WatchdogManager::markProgress();
+        SerialCommands::update();
+        checkScheduledReboot();
+        elapsed += step;
     }
 }
 
 void setup() {
     Serial.begin(115200);
     delay(200);
-    loadSoakCounters();
-    Serial.printf("=== flight-tracker-arduino booting (boot #%u, reset reason=%s) ===\n", bootCount,
-                  resetReasonName(esp_reset_reason()));
+    Diag::begin();
+    Serial.printf("=== flight-tracker-arduino booting (boot #%u, reason=%s) ===\n", Diag::bootCount(),
+                  Diag::bootReason());
 
     display.begin();
 
@@ -127,7 +90,8 @@ void setup() {
 
 void loop() {
     WatchdogManager::markProgress();
-    checkDebugToggle();
+    SerialCommands::update();
+    checkScheduledReboot();
 
     static bool timeSyncLogged = false;
     if (!timeSyncLogged && TimeSync::isSynced()) {
@@ -141,8 +105,7 @@ void loop() {
     }
 
     if (!WifiManager::isConnected()) {
-        wifiReconnectCount++;
-        saveSoakCounters();
+        Diag::noteWifiReconnect();
         WifiManager::connect(onWifiAttempt, onWifiProgress);  // dropped mid-run - reconnect
         Serial.print("[wifi] reconnected! IP: ");
         Serial.println(WiFi.localIP());
@@ -158,8 +121,7 @@ void loop() {
     int count = OpenSkyClient::fetchNearby(radius, flights, MAX_ROWS);
 
     if (count < 0) {
-        fetchFailCount++;
-        saveSoakCounters();
+        Diag::noteCycle(false);
         Serial.printf("[main] fetch failed: %s\n", OpenSkyClient::lastErrorMessage());
         display.clear(display.black);
         display.drawText8x8(4, 4, "Error fetching data:", display.red, display.black);
@@ -170,12 +132,10 @@ void loop() {
         // blinking during runs of frequent failures).
         Renderer::renderValues(display, flights, 0);  // draws just the heartbeat (count=0)
         logSoakLine();
-        WatchdogManager::delayWithProgress(OpenSkyClient::currentRefreshInterval() * 1000UL,
-                                            REDRAW_SECONDS * 1000UL);
+        waitServicing(OpenSkyClient::currentRefreshInterval() * 1000UL);
         return;
     }
-    fetchOkCount++;
-    saveSoakCounters();
+    Diag::noteCycle(true);
 
     int missingCount = FlightSelector::findMissing(flights, count, missing, MAX_ROWS);
     WatchdogManager::markProgress();
@@ -193,7 +153,8 @@ void loop() {
     while (elapsedS < targetS) {
         delay(REDRAW_SECONDS * 1000UL);
         WatchdogManager::markProgress();
-        checkDebugToggle();
+        SerialCommands::update();
+        checkScheduledReboot();
         elapsedS += REDRAW_SECONDS;
         FlightMath::applyDeadReckoning(flights, count, (float)elapsedS);
         Renderer::renderValues(display, flights, count);
