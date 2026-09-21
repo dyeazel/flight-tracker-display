@@ -11,6 +11,14 @@
 #include "network/AdsbdbClient.h"
 #include "time/TimeSync.h"
 
+#ifdef SCREEN_CAPTURE
+#include "display/DisplayManager.h"
+extern DisplayManager display;  // defined in main.cpp
+#endif
+#ifdef SIM_DATA
+#include "flight/SimFlights.h"
+#endif
+
 namespace SerialCommands {
 
 namespace {
@@ -119,6 +127,32 @@ void handleLine(const char *line) {
         Diag::testResetCounters();
         return replyOk("_resetdiag");
     }
+#ifdef SIM_DATA
+    if (!strcmp(cmd, "_sim")) {  // {"cmd":"_sim","n":3} holds scene 3; n < 0 resumes cycling. Always reports count/scene.
+        SimFlights::hold(in["n"] | -1);
+        const int cur = SimFlights::current(millis());
+        JsonDocument d;
+        d["ok"] = true;
+        d["cmd"] = "_sim";
+        d["count"] = SimFlights::count();
+        d["scene"] = cur;
+        d["name"] = SimFlights::name(cur);
+        return reply(d);
+    }
+#endif
+#ifdef SCREEN_CAPTURE
+    if (!strcmp(cmd, "_shot")) {  // dumps the panel as "#S x y w h <hex RGB565 LE>" strips; see tools/screenshot.py
+        JsonDocument d;
+        d["ok"] = true;
+        d["cmd"] = "_shot";
+        d["w"] = display.width();
+        d["h"] = display.height();
+        reply(d);
+        Serial.flush();
+        display.dumpScreen();
+        return;
+    }
+#endif
     if (!strcmp(cmd, "_lookup")) {  // {"cmd":"_lookup","callsign":"ZZZ9999"}: one adsbdb lookup, incl. its retry policy
         AdsbdbClient::RouteInfo info;
         const bool found = AdsbdbClient::lookupRoute(in["callsign"] | "", &info);

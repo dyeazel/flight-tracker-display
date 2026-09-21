@@ -20,6 +20,8 @@
 // call fails immediately), _slownet {"ms":N} (every network call stalls N ms first, with no progress
 // marking), _resetdiag (wipes lifetime counters - avoid on the deployed board), _lookup {"callsign":".."}
 // (one adsbdb lookup with its real retry policy; compare diag's sources.adsbdb before/after).
+// Screenshot builds (SCREEN_CAPTURE, env:esp32dev-shot / -sim) add _shot (dump the panel; tools/screenshot.py);
+// sim builds (SIM_DATA, env:esp32dev-sim) add _sim {"n":k} to hold scripted scene k (n < 0 resumes cycling).
 namespace SerialCommands {
 
 // Call from the main loop and from any long delay loop; non-blocking (reads only what is buffered).

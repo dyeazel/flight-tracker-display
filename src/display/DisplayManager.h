@@ -41,6 +41,13 @@ public:
     // RGB565 colors, computed once in begin().
     uint16_t white, black, green, gray, red, yellow;
 
+#ifdef SCREEN_CAPTURE
+    // Streams the panel's current contents over serial as "#S x y w h <hex>" lines (RGB565, low byte
+    // first), 8 rows per line, ~27 s at 115200 baud. Reads the actual panel back, so it shows exactly what
+    // is on the glass. Blocks the caller for the duration (marks watchdog progress per strip).
+    void dumpScreen();
+#endif
+
 private:
     TFT_eSPI tft_;
 };

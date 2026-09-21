@@ -8,6 +8,7 @@
 #include "flight/Flight.h"
 #include "flight/FlightMath.h"
 #include "flight/FlightSelector.h"
+#include "flight/SimFlights.h"
 #include "network/OpenSkyClient.h"
 #include "network/WifiManager.h"
 #include "render/Renderer.h"
@@ -41,6 +42,17 @@ static void onWifiAttempt(int attempt) {
 }
 
 static void onWifiProgress() { WatchdogManager::markProgress(); }
+
+static void showFetchError(const char *message) {
+    display.clear(display.black);
+    display.drawText8x8(4, 4, "Error fetching data:", display.red, display.black);
+    display.drawText8x8(4, 14, message, display.white, display.black);
+    // Blink on every loop pass, not just successful ones - this exact
+    // omission was a real bug in the Python version this session (the
+    // error path forgot to call the heartbeat, so it silently stopped
+    // blinking during runs of frequent failures).
+    Renderer::renderValues(display, flights, 0);  // draws just the heartbeat (count=0)
+}
 
 // The scheduled self-reboot runs here, in task context, rather than in the
 // watchdog's timer ISR: from the ISR only esp_restart_noos() is safe, which
@@ -111,6 +123,26 @@ void loop() {
         Serial.println(WiFi.localIP());
     }
 
+#ifdef SIM_DATA
+    // Scripted scenes instead of live data (env:esp32dev-sim): redraw only when the scene changes.
+    static int shown = -2;
+    const int scene = SimFlights::current(millis());
+    if (scene != shown) {
+        shown = scene;
+        const SimFlights::Scene sc =
+            SimFlights::fill(scene, flights, MAX_ROWS, missing, (long)TimeSync::nowUtc());
+        if (sc.error) {
+            showFetchError("Sim: connection failed");
+        } else {
+            Renderer::render(display, flights, sc.count, missing, sc.missingCount, sc.anyFlagged);
+            if (sc.refreshing) Renderer::drawRefreshing(display);
+        }
+        Serial.printf("[sim] scene %d/%d %s\n", scene, SimFlights::count(), SimFlights::name(scene));
+    }
+    delay(100);
+    return;
+#endif
+
     // Marks the heartbeat yellow for the whole blocking fetch+enrich
     // window below (OpenSky, then per-flight adsbdb/AeroDataBox lookups) -
     // without this the square just sits frozen at its last state for
@@ -123,14 +155,7 @@ void loop() {
     if (count < 0) {
         Diag::noteCycle(false);
         Serial.printf("[main] fetch failed: %s\n", OpenSkyClient::lastErrorMessage());
-        display.clear(display.black);
-        display.drawText8x8(4, 4, "Error fetching data:", display.red, display.black);
-        display.drawText8x8(4, 14, OpenSkyClient::lastErrorMessage(), display.white, display.black);
-        // Blink on every loop pass, not just successful ones - this exact
-        // omission was a real bug in the Python version this session (the
-        // error path forgot to call the heartbeat, so it silently stopped
-        // blinking during runs of frequent failures).
-        Renderer::renderValues(display, flights, 0);  // draws just the heartbeat (count=0)
+        showFetchError(OpenSkyClient::lastErrorMessage());
         logSoakLine();
         waitServicing(OpenSkyClient::currentRefreshInterval() * 1000UL);
         return;
