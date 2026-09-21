@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "config.h"
+#include "diag/Diag.h"
 #include "flight/FlightMath.h"
 #include "secrets.h"
 
@@ -63,6 +64,13 @@ bool getToken(char *tokenOut, size_t tokenOutSize, bool force) {
         return true;
     }
 
+    Diag::FetchTimer t(Diag::Source::Token, "auth.opensky-network.org");
+    if (!t.gate()) {
+        strncpy(lastError, "token: blocked", sizeof(lastError) - 1);
+        return false;
+    }
+    t.dns();
+
     WiFiClientSecure client;
     client.setInsecure();
     client.setTimeout(15);
@@ -72,6 +80,7 @@ bool getToken(char *tokenOut, size_t tokenOutSize, bool force) {
 
     if (!http.begin(client, OPENSKY_TOKEN_URL)) {
         strncpy(lastError, "token: begin failed", sizeof(lastError) - 1);
+        t.finish(false, -1, "begin");
         return false;
     }
     http.addHeader("Content-Type", "application/x-www-form-urlencoded");
@@ -79,6 +88,7 @@ bool getToken(char *tokenOut, size_t tokenOutSize, bool force) {
                   "&client_secret=" + OPENSKY_CLIENT_SECRET;
 
     int code = http.POST(body);
+    t.gotResponse();
     bool ok = false;
     if (code == 200) {
         JsonDocument doc;
@@ -98,6 +108,7 @@ bool getToken(char *tokenOut, size_t tokenOutSize, bool force) {
         snprintf(lastError, sizeof(lastError), "token: HTTP %d", code);
     }
     http.end();
+    t.finish(ok, code, code == 200 ? "parse" : "http");
     return ok;
 }
 
@@ -113,6 +124,13 @@ int currentRefreshInterval() {
 // parses the body into outFlights/outCount and updates rateLimitRemaining.
 static int fetchOnce(const char *path, const char *token, float radiusMi, Flight *outFlights,
                       int maxOut, int *outCount) {
+    Diag::FetchTimer t(Diag::Source::States, OPENSKY_HOST);
+    if (!t.gate()) {
+        strncpy(lastError, "states: blocked", sizeof(lastError) - 1);
+        return -1;
+    }
+    t.dns();
+
     WiFiClientSecure client;
     client.setInsecure();
     client.setTimeout(20);
@@ -132,6 +150,7 @@ static int fetchOnce(const char *path, const char *token, float radiusMi, Flight
     snprintf(url, sizeof(url), "https://%s%s", OPENSKY_HOST, path);
     if (!http.begin(client, url)) {
         strncpy(lastError, "states: begin failed", sizeof(lastError) - 1);
+        t.finish(false, -1, "begin");
         return -1;
     }
 
@@ -143,6 +162,8 @@ static int fetchOnce(const char *path, const char *token, float radiusMi, Flight
     http.addHeader("Authorization", authHeader);
 
     int code = http.GET();
+    t.gotResponse();
+    bool parsedOk = false;
     if (code == 200) {
         if (http.hasHeader("X-Rate-Limit-Remaining")) {
             rateLimitRemaining = http.header("X-Rate-Limit-Remaining").toInt();
@@ -212,8 +233,8 @@ static int fetchOnce(const char *path, const char *token, float radiusMi, Flight
                     // arrival order (not distance-sorted - a tracked
                     // flight could be anywhere), up to maxOut.
                     bool isTarget = false;
-                    for (int t = 0; t < TARGET_CALLSIGNS_COUNT; t++) {
-                        if (strcmp(f.callsign, TARGET_CALLSIGNS[t]) == 0) {
+                    for (int ti = 0; ti < TARGET_CALLSIGNS_COUNT; ti++) {
+                        if (strcmp(f.callsign, TARGET_CALLSIGNS[ti]) == 0) {
                             isTarget = true;
                             break;
                         }
@@ -226,6 +247,7 @@ static int fetchOnce(const char *path, const char *token, float radiusMi, Flight
                     insertSorted(outFlights, *outCount, maxOut, f);
                 }
             }
+            parsedOk = true;
         }
     } else {
         Serial.printf("[opensky] GET -> code=%d\n", code);
@@ -233,7 +255,10 @@ static int fetchOnce(const char *path, const char *token, float radiusMi, Flight
         if (code == 429) rateLimitRemaining = 0;
     }
     http.end();
-    return code;
+    t.finish(code == 200 && parsedOk, code, code == 200 ? "parse" : "http");
+    // A 200 whose body didn't parse used to fall through as "200, 0 flights",
+    // i.e. a silent success that showed an empty sky. Report it as a failure.
+    return (code == 200 && !parsedOk) ? -3 : code;
 }
 
 int fetchNearby(float radiusMi, Flight *outFlights, int maxOut) {
@@ -267,6 +292,10 @@ bool fetchLiveTrackFirstPoint(const char *icao24, float *outLat, float *outLon) 
 
     if (!getToken(tokenScratch, kTokenBufSize)) return false;
 
+    Diag::FetchTimer t(Diag::Source::Track, OPENSKY_HOST);
+    if (!t.gate()) return false;
+    t.dns();
+
     WiFiClientSecure client;
     client.setInsecure();
     client.setTimeout(15);
@@ -279,13 +308,17 @@ bool fetchLiveTrackFirstPoint(const char *icao24, float *outLat, float *outLon) 
     static char url[160];
     snprintf(url, sizeof(url), "https://%s%s?icao24=%s&time=0", OPENSKY_HOST, OPENSKY_TRACKS_PATH,
               icao24);
-    if (!http.begin(client, url)) return false;
+    if (!http.begin(client, url)) {
+        t.finish(false, -1, "begin");
+        return false;
+    }
 
     static char authHeader[kTokenBufSize + 16];
     snprintf(authHeader, sizeof(authHeader), "Bearer %s", tokenScratch);
     http.addHeader("Authorization", authHeader);
 
     int code = http.GET();
+    t.gotResponse();
     bool ok = false;
     if (code == 200) {
         // Buffered String, not http.getStream() directly - same chunked-
@@ -309,6 +342,8 @@ bool fetchLiveTrackFirstPoint(const char *icao24, float *outLat, float *outLon) 
         }
     }
     http.end();
+    // 404 = OpenSky has no track for this aircraft (yet): a valid answer, not a network failure.
+    t.finish(ok || code == 404, code, code == 404 ? "no-track" : code == 200 ? "parse" : "http");
     return ok;
 }
 

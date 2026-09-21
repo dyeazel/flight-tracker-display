@@ -6,7 +6,9 @@
 #include <WiFiClientSecure.h>
 
 #include "config.h"
+#include "diag/Diag.h"
 #include "util/Ascii.h"
+#include "watchdog/WatchdogManager.h"
 
 namespace AdsbdbClient {
 
@@ -16,6 +18,11 @@ namespace AdsbdbClient {
 // callsign" is not a transport failure and must not be retried, unlike an
 // actual connection/TLS error.
 static int fetchOnce(const char *callsign, RouteInfo *info, bool *foundRoute) {
+    *foundRoute = false;
+    Diag::FetchTimer t(Diag::Source::Adsbdb, "api.adsbdb.com");
+    if (!t.gate()) return -1;
+    t.dns();
+
     WiFiClientSecure client;
     client.setInsecure();
     client.setTimeout(15);
@@ -25,14 +32,19 @@ static int fetchOnce(const char *callsign, RouteInfo *info, bool *foundRoute) {
 
     static char url[128];  // static, not stack-local - see OpenSkyClient.cpp's comment
     snprintf(url, sizeof(url), ADSBDB_URL_FMT, callsign);
-    *foundRoute = false;
-    if (!http.begin(client, url)) return -1;
+    if (!http.begin(client, url)) {
+        t.finish(false, -1, "begin");
+        return -1;
+    }
     http.addHeader("User-Agent", USER_AGENT);
 
     int code = http.GET();
+    t.gotResponse();
+    bool parsedOk = true;
     if (code == 200) {
         JsonDocument doc;
         DeserializationError err = deserializeJson(doc, http.getStream());
+        parsedOk = !err;
         if (!err) {
             JsonVariant route = doc["response"]["flightroute"];
             if (!route.isNull()) {
@@ -77,6 +89,10 @@ static int fetchOnce(const char *callsign, RouteInfo *info, bool *foundRoute) {
         }
     }
     http.end();
+    // 404 {"response":"unknown callsign"} is adsbdb's definitive "no route on
+    // file" answer: a valid response, not a network failure.
+    t.finish((code == 200 && parsedOk) || code == 404, code,
+             code == 404 ? "no-route" : code == 200 ? "parse" : "http");
     return code;
 }
 
@@ -84,8 +100,16 @@ bool lookupRoute(const char *callsign, RouteInfo *info) {
     *info = RouteInfo();
     bool foundRoute = false;
     for (int attempt = 0; attempt < HTTPS_RETRIES; attempt++) {
+        // Each attempt is bounded by its own timeouts, so marking progress
+        // per attempt keeps a slow provider from looking like a stalled
+        // loop to the watchdog (enrich() makes up to MAX_ROWS of these
+        // calls back to back).
+        WatchdogManager::markProgress();
         int code = fetchOnce(callsign, info, &foundRoute);
-        if (code == 200) return foundRoute;  // clean response either way - don't retry
+        // A clean answer either way - don't retry. 404 ("unknown callsign") is
+        // definitive; retrying it cost 4 TLS handshakes (~10 s of blocking, measured)
+        // per unknown callsign on every poll.
+        if (code == 200 || code == 404) return foundRoute;
         if (attempt < HTTPS_RETRIES - 1) delay(HTTPS_RETRY_DELAY_MS);
     }
     return false;
