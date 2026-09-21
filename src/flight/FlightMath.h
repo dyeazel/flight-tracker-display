@@ -33,9 +33,22 @@ bool isScheduledCallsign(const char *callsign);
 
 // Sanity-check a resolved route (from adsbdb) against the aircraft's live
 // position - see cyd_nearby_flights.py's route_is_plausible for the
-// rationale (adsbdb's table is static and can be stale/wrong).
-bool routeIsPlausible(float curLat, float curLon, float originLat,
-                       float originLon, float destLat, float destLon);
+// rationale (adsbdb's table is static and can be stale/wrong). Two
+// independent checks, either of which can flag the route:
+//  - distance: does going origin->current->destination cost much more
+//    total distance than a direct flight (the original, ported check).
+//  - heading (added after a live case - UA1217 claiming IAH->BOS while
+//    actually cruising WNW over Wisconsin, heading almost exactly AWAY
+//    from Boston - passed the distance check alone on slack, since IAH-BOS
+//    is a long enough trip that a Wisconsin detour didn't blow the
+//    threshold): does the aircraft's actual track point roughly toward the
+//    claimed destination, not away from it. Only checked when hasHeading
+//    and moving fast enough for heading to mean anything (same
+//    MIN_DEAD_RECKON_KT floor dead-reckoning already uses) - skipped
+//    entirely otherwise, same as the distance check already skips a
+//    zero-distance route.
+bool routeIsPlausible(float curLat, float curLon, bool hasHeading, float heading, float speedKt,
+                       float originLat, float originLon, float destLat, float destLon);
 
 // 16-point compass abbreviation (e.g. "NNE") for a bearing in degrees.
 const char *cardinalDirection(float brg);

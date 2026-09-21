@@ -90,15 +90,20 @@ bool enrich(Flight *flights, int count) {
 
         bool plausible = true;
         if (haveRoute && info.haveOriginCoords && info.haveDestCoords) {
-            plausible = FlightMath::routeIsPlausible(f.lat, f.lon, info.originLat, info.originLon,
+            plausible = FlightMath::routeIsPlausible(f.lat, f.lon, f.hasHeading, f.heading,
+                                                       f.speedKt, info.originLat, info.originLon,
                                                        info.destLat, info.destLon);
         }
         if (DEBUG) {
+            float bearingToDest = info.haveDestCoords
+                                        ? FlightMath::bearingDeg(f.lat, f.lon, info.destLat, info.destLon)
+                                        : 0;
             Serial.printf(
                 "[enrich] %s haveRoute=%d origin=%s(%.4f,%.4f) dest=%s(%.4f,%.4f) "
-                "cur=(%.4f,%.4f) plausible=%d\n",
+                "cur=(%.4f,%.4f) heading=%.0f bearingToDest=%.0f plausible=%d\n",
                 f.callsign, haveRoute, info.originCode, info.originLat, info.originLon,
-                info.destinationCode, info.destLat, info.destLon, f.lat, f.lon, plausible);
+                info.destinationCode, info.destLat, info.destLon, f.lat, f.lon,
+                f.hasHeading ? f.heading : -1, bearingToDest, plausible);
         }
 
         // adsbdb's route table is static and can be stale/wrong - if it

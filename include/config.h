@@ -70,6 +70,20 @@ extern const char *const TARGET_CALLSIGNS[];
 extern const char *const CHARTER_OPERATOR_PREFIXES[CHARTER_OPERATOR_PREFIXES_COUNT];
 #define ROUTE_FLAG "*"
 
+// How far (degrees) an aircraft's actual heading may diverge from the
+// bearing toward its claimed destination before routeIsPlausible() flags
+// the route - added after a live case (UA1217, 2026-09-19) where adsbdb
+// claimed IAH->BOS for a flight actually cruising over Wisconsin heading
+// almost exactly AWAY from Boston (heading 302 deg vs. an 88 deg bearing
+// to BOS - a 146 deg mismatch), which the distance-only check missed
+// entirely (IAH-BOS is a long enough trip that the Wisconsin detour didn't
+// exceed the 50%+150mi slack). Kept generous (90 deg, i.e. "more moving
+// away than toward") specifically to tolerate ordinary route curvature -
+// SIDs/STARs, wind-optimized routing, ATC vectoring - which can
+// legitimately diverge 30-45 deg from a straight bearing but essentially
+// never more than that for a real point-to-point commercial flight.
+#define HEADING_MISMATCH_THRESHOLD_DEG 90.0f
+
 // ---- Rendering / layout ----
 #define ALT_TREND_THRESHOLD_FPM 150.0f
 #define TREND_ICON_SIZE 8

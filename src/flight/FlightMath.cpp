@@ -77,15 +77,23 @@ bool isScheduledCallsign(const char *callsign) {
     return true;
 }
 
-bool routeIsPlausible(float curLat, float curLon, float originLat,
-                       float originLon, float destLat, float destLon) {
+bool routeIsPlausible(float curLat, float curLon, bool hasHeading, float heading, float speedKt,
+                       float originLat, float originLon, float destLat, float destLon) {
     float total = haversineMiles(originLat, originLon, destLat, destLon);
     if (total <= 0) return true;  // nothing to check against
     float viaCurrent = haversineMiles(originLat, originLon, curLat, curLon) +
                         haversineMiles(curLat, curLon, destLat, destLon);
     // Proportional slack (50% over great-circle) plus a flat floor (150mi)
     // so short regional hops aren't flagged over ordinary vectoring.
-    return viaCurrent <= total * 1.5f + 150.0f;
+    if (viaCurrent > total * 1.5f + 150.0f) return false;
+
+    if (hasHeading && speedKt >= MIN_DEAD_RECKON_KT) {
+        float bearingToDest = bearingDeg(curLat, curLon, destLat, destLon);
+        float diff = fmodf(fabsf(heading - bearingToDest), 360.0f);
+        if (diff > 180.0f) diff = 360.0f - diff;
+        if (diff > HEADING_MISMATCH_THRESHOLD_DEG) return false;
+    }
+    return true;
 }
 
 static const char *const kCardinalPoints[16] = {
