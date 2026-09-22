@@ -12,7 +12,6 @@
 #include "network/DepartureVerifier.h"
 #include "network/RouteCache.h"
 #include "time/TimeSync.h"
-#include "watchdog/WatchdogManager.h"
 
 namespace FlightSelector {
 
@@ -85,11 +84,6 @@ bool enrich(Flight *flights, int count) {
         if (strcmp(f.callsign, "N/A") == 0 || !FlightMath::isScheduledCallsign(f.callsign)) {
             continue;
         }
-        // Every flight below can cost several blocking network calls; without
-        // this, a slow provider across a full screen of flights could outlast
-        // the watchdog's stall window even though each call is bounded.
-        WatchdogManager::markProgress();
-
         AdsbdbClient::RouteInfo info;
         bool haveRoute = AdsbdbClient::lookupRoute(f.callsign, &info);
 

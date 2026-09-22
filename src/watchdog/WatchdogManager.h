@@ -16,9 +16,15 @@
 // has been marked in that long - the same generous, independent fallback the
 // MicroPython version had as its second layer.
 //
-// The scheduled self-reboot (SELF_REBOOT_INTERVAL_MS) is NOT here: it runs in
-// main.cpp's loop via Diag::reboot(), because a restart from this ISR can
-// neither record its reason nor deauthenticate from the router cleanly.
+// The scheduled self-reboot (SELF_REBOOT_INTERVAL_MS) is NOT here: it runs via Health/Diag::reboot() in
+// task context, because a restart from this ISR can neither record its reason nor deauthenticate from the
+// router cleanly.
+//
+// Fed ONLY from the UI task (main.cpp's loop()) since NetTask was split out onto its own FreeRTOS task -
+// markProgress() must not be called from NetTask or anything it calls (adsbdb/AeroDataBox/OpenSky
+// clients, FlightSelector::enrich()): this is a single shared timestamp, so calls from a second task would
+// mean a wedged UI loop could still look "alive" as long as NetTask kept running. NetTask's own liveness
+// is watched separately, by Health, via NetTask::msSinceLoop().
 namespace WatchdogManager {
 
 // Starts the hardware-timer stall ISR. Call once, early in setup().

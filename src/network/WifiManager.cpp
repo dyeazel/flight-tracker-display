@@ -7,10 +7,33 @@
 
 namespace WifiManager {
 
+namespace {
+#ifdef TEST_HOOKS
+bool gForceDown = false;
+#endif
+
+// The one place "are we really connected" is decided - both connect()'s loop condition and isConnected()
+// go through this, so gForceDown can't make them disagree (that would busy-spin connect(): a real
+// WL_CONNECTED status would end its loop immediately while isConnected() kept reporting down).
+bool reallyConnected() {
+#ifdef TEST_HOOKS
+    if (gForceDown) return false;
+#endif
+    return WiFi.status() == WL_CONNECTED;
+}
+}  // namespace
+
 void connect(StatusCallback onAttempt, ProgressCallback onProgress) {
     WiFi.mode(WIFI_STA);
     int attempt = 0;
-    while (WiFi.status() != WL_CONNECTED) {
+    while (!reallyConnected()) {
+#ifdef TEST_HOOKS
+        if (gForceDown) {
+            if (onProgress) onProgress();
+            delay(1000);
+            continue;
+        }
+#endif
         attempt++;
         if (onAttempt) onAttempt(attempt);
 
@@ -37,6 +60,10 @@ void connect(StatusCallback onAttempt, ProgressCallback onProgress) {
     }
 }
 
-bool isConnected() { return WiFi.status() == WL_CONNECTED; }
+bool isConnected() { return reallyConnected(); }
+
+#ifdef TEST_HOOKS
+void testForceDown(bool on) { gForceDown = on; }
+#endif
 
 }  // namespace WifiManager

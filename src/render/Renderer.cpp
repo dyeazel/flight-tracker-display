@@ -262,4 +262,12 @@ void drawRefreshing(DisplayManager &display) {
                       display.yellow);
 }
 
+// A steady (non-toggling) red square: the flights on screen are real, but old - NetTask hasn't completed
+// a fetch in a while (see main.cpp's staleness check). Distinct from drawRefreshing()'s yellow (a poll is
+// actively in flight right now) and from the per-field red '*' flags elsewhere on screen (those flag one
+// suspect route, not the whole screen's freshness).
+void drawStale(DisplayManager &display) {
+    display.fillRect(display.width() - HEARTBEAT_SIZE - 2, 2, HEARTBEAT_SIZE, HEARTBEAT_SIZE, display.red);
+}
+
 }  // namespace Renderer

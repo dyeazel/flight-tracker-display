@@ -8,7 +8,6 @@
 #include "config.h"
 #include "diag/Diag.h"
 #include "util/Ascii.h"
-#include "watchdog/WatchdogManager.h"
 
 namespace AdsbdbClient {
 
@@ -100,11 +99,6 @@ bool lookupRoute(const char *callsign, RouteInfo *info) {
     *info = RouteInfo();
     bool foundRoute = false;
     for (int attempt = 0; attempt < HTTPS_RETRIES; attempt++) {
-        // Each attempt is bounded by its own timeouts, so marking progress
-        // per attempt keeps a slow provider from looking like a stalled
-        // loop to the watchdog (enrich() makes up to MAX_ROWS of these
-        // calls back to back).
-        WatchdogManager::markProgress();
         int code = fetchOnce(callsign, info, &foundRoute);
         // A clean answer either way - don't retry. 404 ("unknown callsign") is
         // definitive; retrying it cost 4 TLS handshakes (~10 s of blocking, measured)

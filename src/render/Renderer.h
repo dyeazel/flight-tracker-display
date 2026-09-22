@@ -38,4 +38,8 @@ void renderValues(DisplayManager &display, Flight *flights, int count);
 // completes.
 void drawRefreshing(DisplayManager &display);
 
+// Marks the heartbeat square steady red - the on-screen flights are real but stale (no successful fetch
+// in a while). See main.cpp's staleness check and NetTask.h.
+void drawStale(DisplayManager &display);
+
 }  // namespace Renderer

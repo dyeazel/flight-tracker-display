@@ -9,7 +9,11 @@
 #include "diag/Diag.h"
 #include "flight/FlightMath.h"
 #include "network/AdsbdbClient.h"
+#include "network/WifiManager.h"
 #include "time/TimeSync.h"
+#ifndef SIM_DATA
+#include "network/NetTask.h"
+#endif
 
 #ifdef SCREEN_CAPTURE
 #include "display/DisplayManager.h"
@@ -83,7 +87,7 @@ void handleLine(const char *line) {
         d["debug"] = DEBUG;
         d["radius_mi"] = FlightMath::effectiveRadius();
         d["refresh_s"] = REFRESH_SECONDS;
-        d["wifi"] = WiFi.status() == WL_CONNECTED;
+        d["wifi"] = WifiManager::isConnected();  // not a raw WiFi.status() check - see Diag::fillDiag's comment
         d["ip"] = WiFi.localIP().toString();
         d["time_synced"] = TimeSync::isSynced();
         return reply(d);
@@ -93,6 +97,12 @@ void handleLine(const char *line) {
         d["ok"] = true;
         d["cmd"] = "diag";
         Diag::fillDiag(d);
+#ifndef SIM_DATA
+        d["net_task_ms_since_loop"] = NetTask::msSinceLoop();
+        d["net_task_stack_free_min"] = NetTask::stackFreeMin();
+        d["net_task_polling"] = NetTask::isPolling();
+        d["flights_shown"] = NetTask::lastPublishedCount();
+#endif
         return reply(d);
     }
     if (!strcmp(cmd, "debug")) {
@@ -122,6 +132,10 @@ void handleLine(const char *line) {
     if (!strcmp(cmd, "_slownet")) {
         Diag::testSetSlowNetMs(in["ms"] | 0);
         return replyOk("_slownet");
+    }
+    if (!strcmp(cmd, "_wifidown")) {
+        WifiManager::testForceDown(in["on"] | true);
+        return replyOk("_wifidown");
     }
     if (!strcmp(cmd, "_resetdiag")) {
         Diag::testResetCounters();
@@ -153,7 +167,11 @@ void handleLine(const char *line) {
         return;
     }
 #endif
-    if (!strcmp(cmd, "_lookup")) {  // {"cmd":"_lookup","callsign":"ZZZ9999"}: one adsbdb lookup, incl. its retry policy
+    // {"cmd":"_lookup","callsign":"ZZZ9999"}: one adsbdb lookup, incl. its retry policy. Blocks THIS (UI)
+    // task, and races NetTask's own AdsbdbClient calls for its file-static scratch buffers (url, etc.) if
+    // one happens to land mid-call - acceptable for a manual bench command (worst case: a garbled reply,
+    // obviously wrong, just retry), not worth a cross-task request queue for this rare, deliberate use.
+    if (!strcmp(cmd, "_lookup")) {
         AdsbdbClient::RouteInfo info;
         const bool found = AdsbdbClient::lookupRoute(in["callsign"] | "", &info);
         JsonDocument d;

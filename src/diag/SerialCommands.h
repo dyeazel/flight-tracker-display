@@ -16,10 +16,16 @@
 // Failures: {"ok":false,"cmd":"..","error":"bad_json|too_long|unknown_cmd"}
 //
 // Bench-test commands, compiled only into TEST_HOOKS builds (env:esp32dev-test), to force failure paths on
-// real hardware: _hang (stops calling WatchdogManager::markProgress), _blocknet {"on":bool} (every network
-// call fails immediately), _slownet {"ms":N} (every network call stalls N ms first, with no progress
-// marking), _resetdiag (wipes lifetime counters - avoid on the deployed board), _lookup {"callsign":".."}
-// (one adsbdb lookup with its real retry policy; compare diag's sources.adsbdb before/after).
+// real hardware: _hang (stops calling WatchdogManager::markProgress - the UI task, so this now tests the
+// stall ISR in isolation from NetTask, which keeps fetching normally throughout), _blocknet {"on":bool}
+// (every network call, on NetTask, fails immediately), _slownet {"ms":N} (every network call stalls N ms
+// first with no progress marking - large enough and NetTask::msSinceLoop() grows past
+// HEALTH_NET_STUCK_MS, exercising Health's "net stuck" restart), _wifidown {"on":bool} (WifiManager
+// reports itself down without touching the real radio - the real link stays up, so turning it back off
+// recovers instantly; exercises Health's "wifi down" restart, which this project has no runtime WiFi
+// reconfiguration to trigger for real), _resetdiag (wipes lifetime counters - avoid on the deployed
+// board), _lookup {"callsign":".."} (one adsbdb lookup with its real retry policy, on the UI task - see
+// the comment at its call site for the cross-task caveat).
 // Screenshot builds (SCREEN_CAPTURE, env:esp32dev-shot / -sim) add _shot (dump the panel; tools/screenshot.py);
 // sim builds (SIM_DATA, env:esp32dev-sim) add _sim {"n":k} to hold scripted scene k (n < 0 resumes cycling).
 namespace SerialCommands {

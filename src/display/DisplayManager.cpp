@@ -61,10 +61,20 @@ void DisplayManager::fillTriangle(int cx, int cy, int radius, bool pointingUp, u
 //
 // Known limit: the very last pixel of the screen (bottom-right) has no following pixel to borrow red
 // from, so it takes its red from the previous pixel - the corner is background black in every screen.
+//
+// Each strip's whole line (header + hex payload + newline) is built into one buffer and sent with a
+// SINGLE Serial.write() - not assembled from many small ones. NetTask now runs concurrently and logs to
+// Serial on its own schedule (e.g. "[net-t] ... FAIL ..."); the original version built each line from ~80
+// separate Serial.write() calls, any pair of which a NetTask log line could land between, corrupting that
+// strip for the capture tool. Found by reproducing it 3/3 times capturing during a forced outage (NetTask
+// logging a failure every retry) - see tools/screenshot.py's caller. SerialCommands::reply() already uses
+// this same one-write discipline for JSON replies, for the identical reason.
 void DisplayManager::dumpScreen() {
     constexpr int kStrip = 8;
     constexpr int kMaxW = 320;
     static uint16_t buf[kMaxW * (kStrip + 1)];
+    // Header ("#S 0 240 320 8 ") + 2 bytes/pixel * 2 hex chars/byte * kMaxW * kStrip + newline.
+    static char line[32 + kMaxW * kStrip * 4 + 1];
     auto swap16 = [](uint16_t v) -> uint16_t { return (uint16_t)((v >> 8) | (v << 8)); };
     const int W = tft_.width() < kMaxW ? tft_.width() : kMaxW;
     const int H = tft_.height();
@@ -76,26 +86,20 @@ void DisplayManager::dumpScreen() {
         const int readRows = lastStrip ? rows : rows + 1;
         tft_.readRect(0, y, W, readRows, buf);
 
-        Serial.printf("#S 0 %d %d %d ", y, W, rows);
-        char chunk[128];
-        int len = 0;
+        int len = snprintf(line, sizeof(line), "#S 0 %d %d %d ", y, W, rows);
         const int count = W * rows, total = W * readRows;
         for (int n = 0; n < count; n++) {
             const uint16_t raw = swap16(buf[n]);
             const uint16_t next = (n + 1 < total) ? swap16(buf[n + 1]) : raw;
             const uint16_t px = (uint16_t)((next & 0xF800) | (raw & 0x07FF));
             const uint8_t lo = px & 0xFF, hi = px >> 8;  // low byte first
-            chunk[len++] = hex[lo >> 4];
-            chunk[len++] = hex[lo & 15];
-            chunk[len++] = hex[hi >> 4];
-            chunk[len++] = hex[hi & 15];
-            if (len >= (int)sizeof(chunk) - 4) {
-                Serial.write((const uint8_t *)chunk, len);
-                len = 0;
-            }
+            line[len++] = hex[lo >> 4];
+            line[len++] = hex[lo & 15];
+            line[len++] = hex[hi >> 4];
+            line[len++] = hex[hi & 15];
         }
-        if (len) Serial.write((const uint8_t *)chunk, len);
-        Serial.print('\n');
+        line[len++] = '\n';
+        Serial.write((const uint8_t *)line, len);
         WatchdogManager::markProgress();
     }
 }

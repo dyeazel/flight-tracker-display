@@ -7,19 +7,23 @@
 #include <string.h>
 
 #include "config.h"
+#include "network/WifiManager.h"
 
 namespace Diag {
 
 namespace {
 
 // Restart reasons we count. "scheduled"/"user" are recorded before we restart; "stall watchdog" is what a
-// software reset with no recorded reason means (only the stall ISR restarts without writing one).
-const char *const kClasses[] = {"power on", "stall watchdog", "scheduled", "user",
-                                "panic",    "hw watchdog",    "brownout",  "other"};
+// software reset with no recorded reason means (only the stall ISR restarts without writing one). "no
+// data"/"net stuck"/"wifi down"/"low heap" are Health's own restarts (see Health.cpp).
+const char *const kClasses[] = {"power on", "stall watchdog", "scheduled",  "user",     "no data",
+                                "net stuck", "wifi down",      "low heap",   "panic",    "hw watchdog",
+                                "brownout",  "other"};
 constexpr size_t kNumClasses = sizeof(kClasses) / sizeof(kClasses[0]);
 
 char gBootReason[20] = "other";
 uint32_t gRestartCounts[kNumClasses] = {0};
+uint32_t gConsecutiveHealth = 0;
 
 Preferences gSoak;  // namespace "soak", kept open: written every cycle
 bool gSoakOpen = false;
@@ -58,6 +62,7 @@ void loadRestartReason() {
         snprintf(k, sizeof(k), "c%u", (unsigned)i);
         gRestartCounts[i] = p.getUInt(k, 0);
     }
+    gConsecutiveHealth = p.getUInt("consec", 0);
     // A restart we requested left its reason behind; otherwise infer it from the chip's reset cause.
     // (getString/remove on a missing key log NVS errors, hence the isKey guard.)
     String why;
@@ -103,12 +108,14 @@ void begin() {
 
 const char *bootReason() { return gBootReason; }
 
-[[noreturn]] void reboot(const char *why) {
+[[noreturn]] void reboot(const char *why, bool healthReason) {
     Serial.printf("[diag] restarting: %s\n", why);
+    if (healthReason) gConsecutiveHealth++;
     {
         Preferences p;
         if (p.begin("diag", false)) {
             p.putString("why", why);
+            if (healthReason) p.putUInt("consec", gConsecutiveHealth);
             p.end();
         }
     }
@@ -144,12 +151,27 @@ unsigned lifetimeFail() { return gLifeFail; }
 unsigned lifetimeWifiReconnects() { return gLifeWifi; }
 unsigned bootCount() { return gBoots; }
 
+uint32_t msSinceLastOk() { return gBootOk ? millis() - gLastOkMs : millis(); }
+unsigned consecutiveFails() { return gConsecFails; }
+
+unsigned consecutiveHealthReboots() { return gConsecutiveHealth; }
+void clearConsecutiveHealthReboots() {
+    if (!gConsecutiveHealth) return;
+    gConsecutiveHealth = 0;
+    Preferences p;
+    if (p.begin("diag", false)) {
+        p.putUInt("consec", 0);
+        p.end();
+    }
+}
+
 void fillDiag(JsonDocument &d) {
     d["uptime_s"] = millis() / 1000;
     d["boot_reason"] = gBootReason;
     d["boots"] = gBoots;
     JsonObject r = d["restarts"].to<JsonObject>();
     for (size_t i = 0; i < kNumClasses; i++) r[kClasses[i]] = gRestartCounts[i];
+    d["consecutive_health_reboots"] = gConsecutiveHealth;
     d["heap_free"] = ESP.getFreeHeap();
     d["heap_max_alloc"] = ESP.getMaxAllocHeap();
     d["heap_min_free"] = ESP.getMinFreeHeap();
@@ -160,7 +182,10 @@ void fillDiag(JsonDocument &d) {
     d["poll_consecutive_fails"] = gConsecFails;
     d["last_ok_ago_s"] = gBootOk ? (millis() - gLastOkMs) / 1000 : -1;
     d["wifi_reconnects"] = gLifeWifi;
-    d["wifi_connected"] = WiFi.status() == WL_CONNECTED;
+    // WifiManager::isConnected(), not a raw WiFi.status() check here - the two can disagree under the
+    // _wifidown test hook (TEST_HOOKS builds), and more generally this should track whatever the rest of
+    // the app (Health, NetTask) actually bases its decisions on, not the bare radio state.
+    d["wifi_connected"] = WifiManager::isConnected();
     d["rssi"] = WiFi.status() == WL_CONNECTED ? WiFi.RSSI() : 0;
     d["debug"] = DEBUG;
     JsonObject s = d["sources"].to<JsonObject>();
@@ -252,6 +277,7 @@ void testResetCounters() {
     gBoots = 1;
     gLifeOk = gLifeFail = gLifeWifi = 0;
     gBootOk = gBootFail = gConsecFails = 0;
+    gConsecutiveHealth = 0;
     if (gSoakOpen) {
         gSoak.putUInt("bootCount", gBoots);
         gSoak.putUInt("fetchOk", 0);

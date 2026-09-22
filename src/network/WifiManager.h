@@ -20,4 +20,12 @@ void connect(StatusCallback onAttempt = nullptr, ProgressCallback onProgress = n
 
 bool isConnected();
 
+#ifdef TEST_HOOKS
+// Bench-test hook: makes isConnected() report false and connect() spin without actually attempting,
+// WITHOUT touching the real radio/association - the real WiFi link stays up underneath, so turning this
+// back off recovers instantly instead of needing a real reconnect. Exercises Health's "wifi down" check,
+// which this project (unlike ../mlb-board) has no runtime-reconfigurable credentials to trigger for real.
+void testForceDown(bool on);
+#endif
+
 }  // namespace WifiManager

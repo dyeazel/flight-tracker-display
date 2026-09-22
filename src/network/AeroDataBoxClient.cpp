@@ -11,7 +11,6 @@
 #include "secrets.h"
 #include "time/Iso8601.h"
 #include "util/Ascii.h"
-#include "watchdog/WatchdogManager.h"
 
 namespace {
 
@@ -158,7 +157,6 @@ int fetchOnce(const char *callsign, RouteLeg *outLegs, int maxLegs, int *outLegC
 bool fetchRouteLegs(const char *callsign, RouteLeg *outLegs, int maxLegs, int *outLegCount) {
     *outLegCount = 0;
     for (int attempt = 0; attempt < HTTPS_RETRIES; attempt++) {
-        WatchdogManager::markProgress();  // see AdsbdbClient::lookupRoute
         int code = fetchOnce(callsign, outLegs, maxLegs, outLegCount);
         if (code == 200) return *outLegCount > 0;
         if (attempt < HTTPS_RETRIES - 1) delay(HTTPS_RETRY_DELAY_MS);

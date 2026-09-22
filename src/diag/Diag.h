@@ -26,7 +26,11 @@ const char *bootReason();
 // forgets us, then ESP.restart(). Never returns. The stall watchdog ISR cannot do this (it must use
 // esp_restart_noos, which cannot write NVS) - a boot with no recorded reason after a software reset is
 // therefore classified "stall watchdog".
-[[noreturn]] void reboot(const char *why);
+//
+// healthReason=true (Health's own restarts - "no data"/"net stuck"/"wifi down"/"low heap") increments and
+// persists the consecutive-health-reboot counter; "scheduled"/"user" leave it alone, matching a routine or
+// operator-requested restart rather than a recovery attempt.
+[[noreturn]] void reboot(const char *why, bool healthReason = false);
 
 // One main-loop cycle's outcome (the OpenSky fetch that drives the screen). Feeds the lifetime counters.
 void noteCycle(bool ok);
@@ -36,6 +40,16 @@ unsigned lifetimeOk();
 unsigned lifetimeFail();
 unsigned lifetimeWifiReconnects();
 unsigned bootCount();
+
+// Milliseconds since the last successful cycle, or time since boot if there hasn't been one yet.
+uint32_t msSinceLastOk();
+unsigned consecutiveFails();
+
+// The consecutive-health-reboot count (see reboot() above) and Health's gate on it: Health should stop
+// restarting once this reaches HEALTH_MAX_CONSECUTIVE, and clear it once a run has been stable for a
+// while (see Health::update()) so a later, unrelated outage isn't judged against old attempts.
+unsigned consecutiveHealthReboots();
+void clearConsecutiveHealthReboots();
 
 // Fills the reply for the serial "diag" command.
 void fillDiag(JsonDocument &d);

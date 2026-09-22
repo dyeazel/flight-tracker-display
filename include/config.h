@@ -18,9 +18,67 @@ extern bool DEBUG;
 #ifndef STALL_RESET_MS
 #define STALL_RESET_MS (5UL * 60UL * 1000UL)
 #endif
+// 24h, not the original 6h: two soak runs (9h44m pre-verification, then a full 12h run with Diag/Health
+// instrumentation on 2026-09-21) both showed a perfectly flat heap_max_alloc across every boot segment -
+// no sign of the fragmentation the frequent-reboot mitigation existed for in the first place.
 #ifndef SELF_REBOOT_INTERVAL_MS
-#define SELF_REBOOT_INTERVAL_MS (6UL * 60UL * 60UL * 1000UL)
+#define SELF_REBOOT_INTERVAL_MS (24UL * 60UL * 60UL * 1000UL)
 #endif
+// A scheduled reboot is deferred while flights are on screen (see Health::update()), but forced anyway
+// after this much extra time so it can't be postponed forever by continuous traffic.
+#ifndef SELF_REBOOT_FORCE_EXTRA_MS
+#define SELF_REBOOT_FORCE_EXTRA_MS (6UL * 60UL * 60UL * 1000UL)
+#endif
+
+// ---- Health (loop-level recovery beyond what the stall ISR can see - see src/watchdog/Health.h) ----
+// Each health-triggered restart is counted separately from bootCount and capped at HEALTH_MAX_CONSECUTIVE
+// in a row without a stable run resetting it, so a persistent outage causes a few reboots, not a loop -
+// after that the outage just shows as stale data on screen (main.cpp) until it clears on its own.
+// Every value here is #ifndef-guarded for bench overrides, same as STALL_RESET_MS above.
+//
+// NET_STUCK: the 2026-09-21 soak caught a real case this exists for - an OpenSky token fetch measured
+// taking 120223ms despite HTTPClient being configured with a 15000ms timeout (a known ESP32
+// HTTPClient/WiFiClientSecure quirk: the configured timeout is not always honored under some failure
+// modes). NetTask::msSinceLoop() only advances between its own outer loop iterations, so a single such
+// call - or several chained across a full screen of flights, each individually bounded but not reliably
+// so - correctly shows up here even though every per-call timeout looked fine on paper.
+#ifndef HEALTH_NET_STUCK_MS
+#define HEALTH_NET_STUCK_MS (8UL * 60UL * 1000UL)
+#endif
+// WiFi configured but not connected for this long.
+#ifndef HEALTH_WIFI_DOWN_MS
+#define HEALTH_WIFI_DOWN_MS (30UL * 60UL * 1000UL)
+#endif
+// WiFi up (so NetTask should be able to work) but no successful OpenSky fetch for this long.
+#ifndef HEALTH_NO_DATA_MS
+#define HEALTH_NO_DATA_MS (20UL * 60UL * 1000UL)
+#endif
+// Largest free heap block below this for HEALTH_LOW_HEAP_MS. TLS needs ~16KB contiguous blocks.
+#ifndef HEALTH_MIN_MAXALLOC
+#define HEALTH_MIN_MAXALLOC 24000
+#endif
+#ifndef HEALTH_LOW_HEAP_MS
+#define HEALTH_LOW_HEAP_MS (5UL * 60UL * 1000UL)
+#endif
+#ifndef HEALTH_MAX_CONSECUTIVE
+#define HEALTH_MAX_CONSECUTIVE 3
+#endif
+// Uptime with at least one good fetch that resets the consecutive-health-reboot count.
+#ifndef HEALTH_STABLE_MS
+#define HEALTH_STABLE_MS (10UL * 60UL * 1000UL)
+#endif
+
+// The network task's own FreeRTOS stack. TLS handshake + HTTPClient + JSON parsing run on it; our own big
+// buffers are static, not stack-local (see e.g. OpenSkyClient.cpp) - matches ../mlb-board's NetTask, whose
+// TLS/HTTPClient/ArduinoJson usage is comparable. NetTask::stackFreeMin() (in `diag`) reports the real
+// high-water mark on hardware.
+#define NET_TASK_STACK_BYTES 12288
+
+// While showing the last known flights through an outage (main.cpp), dead-reckoning keeps extrapolating
+// from their last real fix - capped at this many seconds so a long outage settles into a fixed, still-
+// sane-looking position instead of running away into nonsense (deadReckon() itself already says it isn't
+// meant for long extrapolation).
+#define DEAD_RECKON_MAX_S (5UL * 60UL)
 
 // A raw-socket HTTPS fallback (mirroring the MicroPython version's
 // raw_https_get workaround) was planned in case Milestone 3 found
