@@ -14,6 +14,7 @@ namespace {
 const char *const kNames[] = {
     "commercial", "stale-route", "origin-corrected", "dest-guessed", "landed",   "long-names", "codes-only",
     "no-timeline", "six-commercial", "ga-only",       "no-aircraft", "missing-target", "error", "refreshing",
+    "one-name",
 };
 constexpr int kCount = sizeof(kNames) / sizeof(kNames[0]);
 int gHeld = -1;
@@ -124,9 +125,14 @@ Scene fill(int scene, Flight *fl, int maxFlights, char missing[][12], long nowUt
             commercial(fl, n, "EDV4972", "Endeavor Air", kMspOrd, 260, 30.0f, 31000, 0, 445, nowUtc, -0.7f, 1.6f);
             commercial(fl, n, "DAL884", "Delta Air Lines", kAtlLax, 300, 41.0f, 36000, 0, 480, nowUtc, -1.5f, 3.4f);
             break;
-        case 6: {  // provider gave codes only: names row falls back to the codes
+        case 6: {  // provider gave codes only: no names row (it would just repeat the codes line)
             Route codes = {"ORD", "", "LAX", ""};
             commercial(fl, n, "UAL466", "United Airlines", codes, 240, 15.0f, 37000, 0, 470, nowUtc, -1.0f, 3.2f);
+            break;
+        }
+        case 14: {  // only one name known: the other side falls back to its code
+            Route half = {"ORD", "Chicago O'Hare Int'l Airport", "LAX", ""};
+            commercial(fl, n, "UAL466", "United Airlines", half, 240, 15.0f, 37000, 0, 470, nowUtc, -1.0f, 3.2f);
             break;
         }
         case 7:  // no dep/arr times known: no timeline row (3 lines instead of 4)

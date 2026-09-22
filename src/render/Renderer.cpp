@@ -122,14 +122,14 @@ void drawTimelineRow(DisplayManager &display, const Flight &f, int x, int y, uin
 
 // A full-width line combining the two airport names, left name / " -> " /
 // right name, split evenly across the same TIMELINE_WIDTH_CHARS full-line
-// budget drawTimelineRow() above uses. Falls back to the short code (e.g.
-// "ORD") if a provider didn't supply a name for that airport - see
-// Flight::originName/destinationName - so a flight whose provider only
-// gave codes still shows something here instead of a blank field. Static
-// between real polls (names don't change once resolved for a callsign),
-// so unlike drawValueLine()/drawTimelineRow() this is only ever called
-// from render(), never renderValues() - no dead-reckoning tick needs to
-// redraw it.
+// budget drawTimelineRow() above uses. render() only draws this row when at
+// least one name is known (see Flight::originName/destinationName); when
+// just one side has a name, the other side falls back to its short code
+// (e.g. "ORD") rather than a blank field. With no names at all the row would
+// only repeat the codes line, so it is skipped entirely. Static between real
+// polls (names don't change once resolved for a callsign), so unlike
+// drawValueLine()/drawTimelineRow() this is only ever called from render(),
+// never renderValues() - no dead-reckoning tick needs to redraw it.
 void drawAirportNamesRow(DisplayManager &display, const Flight &f, int x, int y,
                           uint16_t originColor, uint16_t destColor) {
     const int kNameChars = (TIMELINE_WIDTH_CHARS - 4) / 2;  // 4 = " -> "
@@ -225,7 +225,7 @@ void render(DisplayManager &display, Flight *flights, int count, char missing[][
         drawValueLine(display, f, VALUE_X, y, statusColor);
         y += 12;
 
-        if (isCommercial && (f.origin[0] || f.destination[0])) {
+        if (isCommercial && (f.originName[0] || f.destinationName[0])) {
             drawAirportNamesRow(display, f, 4, y, originColor, destColor);
             y += 12;
         }
