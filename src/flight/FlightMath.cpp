@@ -1,12 +1,23 @@
 #include "FlightMath.h"
 
-#include <Arduino.h>
+#include <ctype.h>
 #include <math.h>
 #include <string.h>
 
 #include "config.h"
 
 namespace FlightMath {
+
+namespace {
+// Arduino's radians()/degrees()/max()/min() are macros pulled in via
+// <Arduino.h> - reimplemented here so this file has no Arduino dependency
+// and can be compiled into the native Unity test env (see [env:native] in
+// platformio.ini).
+constexpr float radians(float deg) { return deg * (float)M_PI / 180.0f; }
+constexpr float degrees(float rad) { return rad * 180.0f / (float)M_PI; }
+constexpr float maxf(float a, float b) { return a > b ? a : b; }
+constexpr float minf(float a, float b) { return a < b ? a : b; }
+}  // namespace
 
 static const float kEarthRadiusMi = 3958.8f;
 
@@ -52,10 +63,10 @@ void boundingBox(float lat, float lon, float radiusMi, float *outLamin,
     float cosLat = cosf(radians(lat));
     if (cosLat < 0.01f) cosLat = 0.01f;
     float lonDelta = radiusMi / (69.0f * cosLat);
-    *outLamin = max(lat - latDelta, -90.0f);
-    *outLamax = min(lat + latDelta, 90.0f);
-    *outLomin = max(lon - lonDelta, -180.0f);
-    *outLomax = min(lon + lonDelta, 180.0f);
+    *outLamin = maxf(lat - latDelta, -90.0f);
+    *outLamax = minf(lat + latDelta, 90.0f);
+    *outLomin = maxf(lon - lonDelta, -180.0f);
+    *outLomax = minf(lon + lonDelta, 180.0f);
 }
 
 float effectiveRadius() {
@@ -120,7 +131,7 @@ void applyDeadReckoning(Flight *flights, int count, float elapsedS) {
         f.distanceMi = roundf(haversineMiles(HOME_LAT, HOME_LON, newLat, newLon) * 10) / 10;
         float rawAlt = f.fixAltitudeFt + f.vrateFpm * (elapsedS / 60.0f);
         int alt = (int)(roundf(rawAlt / 10.0f) * 10);
-        f.altitudeFt = max(0, alt);
+        f.altitudeFt = alt > 0 ? alt : 0;
     }
 }
 

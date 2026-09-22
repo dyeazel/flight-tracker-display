@@ -2,6 +2,7 @@
 
 #ifdef SIM_DATA
 
+#include <stdio.h>
 #include <string.h>
 
 #include "FlightMath.h"

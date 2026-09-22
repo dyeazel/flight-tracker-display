@@ -1,6 +1,6 @@
 #pragma once
 
-#include <Arduino.h>
+#include <stdint.h>
 #include <time.h>
 
 // One tracked aircraft. Fixed-size char[] fields (not String) throughout -

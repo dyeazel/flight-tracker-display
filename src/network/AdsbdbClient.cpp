@@ -5,9 +5,9 @@
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
 
+#include "AdsbdbParse.h"
 #include "config.h"
 #include "diag/Diag.h"
-#include "util/Ascii.h"
 
 namespace AdsbdbClient {
 
@@ -44,48 +44,7 @@ static int fetchOnce(const char *callsign, RouteInfo *info, bool *foundRoute) {
         JsonDocument doc;
         DeserializationError err = deserializeJson(doc, http.getStream());
         parsedOk = !err;
-        if (!err) {
-            JsonVariant route = doc["response"]["flightroute"];
-            if (!route.isNull()) {
-                JsonVariant airline = route["airline"];
-                JsonVariant origin = route["origin"];
-                JsonVariant dest = route["destination"];
-
-                if (!airline.isNull()) {
-                    strncpy(info->airline, airline["name"] | "", sizeof(info->airline) - 1);
-                    Ascii::sanitize(info->airline);
-                    const char *iata = airline["iata"] | "";
-                    const char *icao = airline["icao"] | "";
-                    strncpy(info->airlineCode, (*iata ? iata : icao), sizeof(info->airlineCode) - 1);
-                }
-                if (!origin.isNull()) {
-                    const char *iata = origin["iata_code"] | "";
-                    const char *icao = origin["icao_code"] | "";
-                    strncpy(info->originCode, (*iata ? iata : icao), sizeof(info->originCode) - 1);
-                    strncpy(info->originName, origin["name"] | "", sizeof(info->originName) - 1);
-                    Ascii::sanitize(info->originName);
-                    if (!origin["latitude"].isNull() && !origin["longitude"].isNull()) {
-                        info->originLat = origin["latitude"].as<float>();
-                        info->originLon = origin["longitude"].as<float>();
-                        info->haveOriginCoords = true;
-                    }
-                }
-                if (!dest.isNull()) {
-                    const char *iata = dest["iata_code"] | "";
-                    const char *icao = dest["icao_code"] | "";
-                    strncpy(info->destinationCode, (*iata ? iata : icao),
-                            sizeof(info->destinationCode) - 1);
-                    strncpy(info->destinationName, dest["name"] | "", sizeof(info->destinationName) - 1);
-                    Ascii::sanitize(info->destinationName);
-                    if (!dest["latitude"].isNull() && !dest["longitude"].isNull()) {
-                        info->destLat = dest["latitude"].as<float>();
-                        info->destLon = dest["longitude"].as<float>();
-                        info->haveDestCoords = true;
-                    }
-                }
-                *foundRoute = true;
-            }
-        }
+        if (!err) *foundRoute = AdsbdbParse::parseRoute(doc.as<JsonVariant>(), info);
     }
     http.end();
     // 404 {"response":"unknown callsign"} is adsbdb's definitive "no route on
