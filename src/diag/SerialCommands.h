@@ -2,7 +2,10 @@
 
 // Newline-delimited JSON commands on the USB serial port: one JSON object per line in, one per line out.
 // Debug logs elsewhere always start with '[', so a host tool can ignore any line not starting with '{'.
-// Same shape as ../mlb-board's SetupSerial (hello/get/diag/reboot), so shared host tools work on both.
+// Line buffering, JSON parsing, and reply hygiene (one Serial.write() per reply, so a concurrent log
+// line can't splice into it) are ../../cyd-common's shared SerialCore - this file only owns the actual
+// command set. Same shape as ../mlb-board's SetupSerial (hello/get/diag/reboot), so shared host tools
+// work on both.
 //
 //   {"cmd":"hello"}            -> {"ok":true,"cmd":"hello","fw":"...","board":"cyd","proto":1}
 //   {"cmd":"get"}              -> {"ok":true,"cmd":"get","debug":false,"radius_mi":50.0,"refresh_s":30,

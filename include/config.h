@@ -9,6 +9,11 @@
 // Toggle at runtime by typing 'd'/'D' + Enter on the serial monitor.
 extern bool DEBUG;
 
+// ---- Serial protocol (../../cyd-common's shared SerialCore) ----
+// Longest incoming command line this app ever needs (all commands here are short - no ssid/password
+// setup command the way mlb-board's SetupSerial has, which needs a much bigger line for that one).
+#define SERIAL_LINE_MAX 160
+
 // ---- Watchdog / self-reboot ----
 // No ESP-IDF task watchdog / WDT_TIMEOUT_MS here - see WatchdogManager.h
 // for why. WDT_CHECK_INTERVAL_MS is this module's own stall-check interval - named to match

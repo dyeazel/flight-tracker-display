@@ -12,6 +12,7 @@
 #include "network/AdsbdbClient.h"
 #include "network/RouteCache.h"
 #include "network/WifiManager.h"
+#include "serial/SerialCore.h"
 #include "time/TimeSync.h"
 #ifndef SIM_DATA
 #include "network/NetTask.h"
@@ -25,54 +26,15 @@ extern DisplayManager display;  // defined in main.cpp
 #include "flight/SimFlights.h"
 #endif
 
+using SerialCore::reply;
+using SerialCore::replyError;
+using SerialCore::replyOk;
+
 namespace SerialCommands {
 
 namespace {
 
-constexpr size_t kLineMax = 160;
-char gLine[kLineMax];  // static: no per-command allocation of the line buffer
-size_t gLen = 0;
-bool gOverflow = false;
-
-// serializeJson(doc, Serial) issues many small writes, and a log line printed in between would land in the middle
-// of the reply and make it unparseable. Build the whole reply first and send it in ONE write; the leading newline
-// guarantees the reply starts on a fresh line even if a log line was cut between its text and its newline.
-void reply(JsonDocument &doc) {
-    char buf[1400];  // on the loop task's 16 KB stack; the largest reply (diag) is under ~900 bytes
-    const size_t need = measureJson(doc);
-    if (need + 2 <= sizeof(buf)) {
-        buf[0] = '\n';
-        const size_t n = serializeJson(doc, buf + 1, sizeof(buf) - 2);
-        buf[1 + n] = '\n';
-        Serial.write(reinterpret_cast<const uint8_t *>(buf), n + 2);
-        return;
-    }
-    Serial.print('\n');  // oversized (not expected): best effort, may interleave
-    serializeJson(doc, Serial);
-    Serial.print('\n');
-}
-
-void replyError(const char *cmd, const char *error) {
-    JsonDocument d;
-    d["ok"] = false;
-    d["cmd"] = cmd ? cmd : "";
-    d["error"] = error;
-    reply(d);
-}
-
-void replyOk(const char *cmd) {
-    JsonDocument d;
-    d["ok"] = true;
-    d["cmd"] = cmd;
-    reply(d);
-}
-
-void handleLine(const char *line) {
-    if (line[0] != '{') return;  // not a command
-    JsonDocument in;
-    if (deserializeJson(in, line)) return replyError("", "bad_json");
-    const char *cmd = in["cmd"] | "";
-
+void handleCommand(JsonDocument &in, const char *cmd) {
     if (!strcmp(cmd, "hello")) {
         JsonDocument d;
         d["ok"] = true;
@@ -200,24 +162,6 @@ void handleLine(const char *line) {
 
 }  // namespace
 
-void update() {
-    while (Serial.available()) {
-        const char c = (char)Serial.read();
-        if (c == '\r') continue;
-        if (c == '\n') {
-            if (gOverflow) {
-                replyError("", "too_long");
-            } else if (gLen > 0) {
-                gLine[gLen] = '\0';
-                handleLine(gLine);
-            }
-            gLen = 0;
-            gOverflow = false;
-            continue;
-        }
-        if (gLen < kLineMax - 1) gLine[gLen++] = c;
-        else gOverflow = true;
-    }
-}
+void update() { SerialCore::update(handleCommand); }
 
 }  // namespace SerialCommands

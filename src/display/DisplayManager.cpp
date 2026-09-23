@@ -1,22 +1,12 @@
 #include "DisplayManager.h"
 
-void DisplayManager::begin() {
-    tft_.init();
-    // Found empirically on real hardware (interactive rotation/color test,
-    // see git history for src/main.cpp's milestone-2c test harness): this
-    // panel needs TFT_eSPI's ILI9341_2_DRIVER (not plain ILI9341_DRIVER -
-    // the plain one reported correct width/height for rotation=1 but the
-    // physical chip didn't actually reconfigure its scan order, same class
-    // of ILI9342-clone MADCTL mismatch as the MicroPython version's ili9341
-    // driver hit) plus TFT_INVERSION_ON (colors were exact bitwise inverses
-    // without it - not an RGB/BGR order issue) plus rotation=1 for
-    // landscape. Both driver/inversion flags live in platformio.ini's
-    // build_flags. Confirmed to match the MicroPython version's on-screen
-    // orientation.
-    tft_.setRotation(1);
+#include "display/PanelInit.h"
 
-    pinMode(TFT_BL, OUTPUT);
-    digitalWrite(TFT_BL, HIGH);
+void DisplayManager::begin() {
+    // ../../cyd-common's shared panel bring-up (init/rotation/backlight) - see PanelInit.h for the
+    // empirical rationale (ILI9341_2_DRIVER + TFT_INVERSION_ON + rotation 1). Confirmed to match the
+    // original MicroPython version's on-screen orientation.
+    PanelInit::begin(tft_);
 
     white = tft_.color565(255, 255, 255);
     black = tft_.color565(0, 0, 0);
