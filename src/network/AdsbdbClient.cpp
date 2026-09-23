@@ -24,10 +24,10 @@ static int fetchOnce(const char *callsign, RouteInfo *info, bool *foundRoute) {
 
     WiFiClientSecure client;
     client.setInsecure();
-    client.setTimeout(15);
+    client.setTimeout(HTTP_TIMEOUT_MS / 1000);
     HTTPClient http;
-    http.setConnectTimeout(15000);
-    http.setTimeout(15000);
+    http.setConnectTimeout(HTTP_TIMEOUT_MS);
+    http.setTimeout(HTTP_TIMEOUT_MS);
 
     static char url[128];  // static, not stack-local - see OpenSkyClient.cpp's comment
     snprintf(url, sizeof(url), ADSBDB_URL_FMT, callsign);

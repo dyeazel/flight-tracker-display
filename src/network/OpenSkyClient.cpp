@@ -51,10 +51,10 @@ bool getToken(char *tokenOut, size_t tokenOutSize, bool force) {
 
     WiFiClientSecure client;
     client.setInsecure();
-    client.setTimeout(15);
+    client.setTimeout(HTTP_TIMEOUT_MS / 1000);
     HTTPClient http;
-    http.setConnectTimeout(15000);
-    http.setTimeout(15000);
+    http.setConnectTimeout(HTTP_TIMEOUT_MS);
+    http.setTimeout(HTTP_TIMEOUT_MS);
 
     if (!http.begin(client, OPENSKY_TOKEN_URL)) {
         strncpy(lastError, "token: begin failed", sizeof(lastError) - 1);
@@ -111,10 +111,10 @@ static int fetchOnce(const char *path, const char *token, float radiusMi, Flight
 
     WiFiClientSecure client;
     client.setInsecure();
-    client.setTimeout(20);
+    client.setTimeout(HTTP_TIMEOUT_MS / 1000);
     HTTPClient http;
-    http.setConnectTimeout(20000);
-    http.setTimeout(20000);
+    http.setConnectTimeout(HTTP_TIMEOUT_MS);
+    http.setTimeout(HTTP_TIMEOUT_MS);
 
     // url/authHeader are static (not stack-local): WiFiClientSecure's TLS
     // handshake (mbedtls_ctr_drbg_seed -> entropy gathering -> SHA) is
@@ -215,10 +215,10 @@ bool fetchLiveTrackFirstPoint(const char *icao24, float *outLat, float *outLon) 
 
     WiFiClientSecure client;
     client.setInsecure();
-    client.setTimeout(15);
+    client.setTimeout(HTTP_TIMEOUT_MS / 1000);
     HTTPClient http;
-    http.setConnectTimeout(15000);
-    http.setTimeout(15000);
+    http.setConnectTimeout(HTTP_TIMEOUT_MS);
+    http.setTimeout(HTTP_TIMEOUT_MS);
 
     // Static - see fetchOnce()'s comment on why buffers here must not be
     // stack-local (mbedTLS's own handshake call chain).

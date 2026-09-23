@@ -50,6 +50,7 @@ static const char *wifiPass() { return WIFI_PASSWORD; }
 // tick while nothing has changed.
 static void showPreDataStatus() {
     static int lastState = -1;
+    static char lastFailure[24] = "";
     int state;
     if (!WifiManager::isConnected()) {
         state = 0;
@@ -60,12 +61,24 @@ static void showPreDataStatus() {
     } else {
         state = 3;
     }
-    if (state == lastState) return;
+    // In state 0, WifiManager::lastFailure() can change (e.g. "wrong_password" -> "timeout" across
+    // retries with different failure modes) without the bucket itself changing - redraw on that too, so
+    // someone on-site debugging a bad AP config sees the current reason, not a stale first one.
+    bool failureChanged = false;
+    if (state == 0 && strcmp(WifiManager::lastFailure(), lastFailure) != 0) {
+        strncpy(lastFailure, WifiManager::lastFailure(), sizeof(lastFailure) - 1);
+        lastFailure[sizeof(lastFailure) - 1] = '\0';
+        failureChanged = true;
+    }
+    if (state == lastState && !failureChanged) return;
     lastState = state;
     display.clear(display.black);
     switch (state) {
         case 0:
             display.drawText8x8(4, 4, "Connecting to WiFi...", display.white, display.black);
+            if (lastFailure[0]) {
+                display.drawText8x8(4, 14, lastFailure, display.red, display.black);
+            }
             break;
         case 1:
             display.drawText8x8(4, 4, "Syncing time...", display.white, display.black);
@@ -101,10 +114,17 @@ void setup() {
     // time sync. No NetTask to keep responsive here, so a simple blocking wait is fine.
     while (!WifiManager::isConnected()) {
         WifiManager::update();
+        TimeSync::update(false);
         delay(50);
     }
     Serial.print("[wifi] connected! IP: ");
     Serial.println(WiFi.localIP());
+    // Bounded, not indefinite: this is a demo/test build (SIM_DATA), and NTP being unreachable on some
+    // bench network shouldn't hang scene iteration forever - only the timeline row's "current time"
+    // marker is affected if it never lands.
+    for (uint32_t start = millis(); !TimeSync::isSynced() && millis() - start < 10000; delay(50)) {
+        TimeSync::update(true);
+    }
 #else
     Health::begin({nullptr, flightsVisible});
     NetTask::begin();  // owns WiFi connect/reconnect and all fetching from here on

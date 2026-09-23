@@ -114,6 +114,17 @@ extern const char *const TARGET_CALLSIGNS[];
 #define WIFI_CONNECT_TIMEOUT_MS 20000  // per attempt
 #define WIFI_RETRY_BACKOFF_MS 5000     // between failed attempts
 
+// Per-call HTTP timeout (connect+TLS+request+headers, via HTTPClient::setTimeout/setConnectTimeout;
+// WiFiClientSecure::setTimeout wants seconds, hence the /1000). Was 15000-20000 (states/all got the
+// longer one) with no real data behind the choice - tuned down to mlb-board's proven value once real
+// per-source timing was available (Phase 1's Diag::FetchTimer/soak logging): every source here
+// typically finishes in 1-3s (confirmed live - see tools/soak_logger.py output), so 8s leaves ~3s of
+// margin beyond SLOW_FETCH_LOG_MS's own "worth logging" threshold before a call is abandoned and
+// retried/backed-off. Does not affect the documented 120223ms OpenSky-token anomaly (config.h's
+// "Health" section) - that call didn't honor its OWN configured timeout at all, which is why NetTask
+// runs on its own task instead of trying to out-tune that specific failure mode.
+#define HTTP_TIMEOUT_MS 8000
+
 // ---- Network endpoints ----
 #define OPENSKY_HOST "opensky-network.org"
 #define OPENSKY_PATH "/api/states/all"
@@ -176,6 +187,9 @@ extern const char *const CHARTER_OPERATOR_PREFIXES[CHARTER_OPERATOR_PREFIXES_COU
 // assumption already baked into HOME_LAT/HOME_LON - update this if the
 // board is ever relocated to a different timezone.
 #define NTP_SERVER "pool.ntp.org"
+#define NTP_SERVER2 "time.cloudflare.com"  // fallbacks if the first is slow/unreachable
+#define NTP_SERVER3 "time.google.com"
+#define NTP_KICK_MS (5UL * 1000UL)  // how often TimeSync::update() restarts SNTP until synced
 #define HOME_TZ_POSIX "CST6CDT,M3.2.0,M11.1.0"  // America/Chicago
 
 // ---- Secondary route provider (fallback cache) ----

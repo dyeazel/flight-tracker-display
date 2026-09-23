@@ -13,6 +13,7 @@
 #include "flight/FlightSelector.h"
 #include "network/OpenSkyClient.h"
 #include "network/WifiManager.h"
+#include "time/TimeSync.h"
 
 namespace NetTask {
 
@@ -89,6 +90,7 @@ void taskMain(void *) {
         // a blocking connect() used to require.
         gLoopMs = millis();
         WifiManager::update();
+        TimeSync::update(WifiManager::isConnected());
         if (WifiManager::takeJustConnected()) {
             if (everConnected) {
                 Diag::noteWifiReconnect();
