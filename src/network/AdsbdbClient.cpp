@@ -7,7 +7,7 @@
 
 #include "AdsbdbParse.h"
 #include "config.h"
-#include "diag/Diag.h"
+#include "diag/NetStats.h"
 
 namespace AdsbdbClient {
 

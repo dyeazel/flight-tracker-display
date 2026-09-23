@@ -11,8 +11,9 @@ extern bool DEBUG;
 
 // ---- Watchdog / self-reboot ----
 // No ESP-IDF task watchdog / WDT_TIMEOUT_MS here - see WatchdogManager.h
-// for why. WDT_FEED_INTERVAL_MS is this module's own stall-check interval.
-#define WDT_FEED_INTERVAL_MS 10000
+// for why. WDT_CHECK_INTERVAL_MS is this module's own stall-check interval - named to match
+// ../cyd-common's shared WatchdogManager (same module, extracted after both apps' copies converged).
+#define WDT_CHECK_INTERVAL_MS 10000
 // #ifndef-guarded so bench builds can shorten them with -D (see
 // [env:esp32dev-test] in platformio.ini) to force-test the recovery paths.
 #ifndef STALL_RESET_MS
@@ -107,6 +108,11 @@ extern const char *const TARGET_CALLSIGNS[];
 #define LOOKUP_ROUTES true
 
 #define MIN_DEAD_RECKON_KT 30.0f
+
+// ---- WiFi (../../cyd-common's shared WifiManager state machine) ----
+#define WIFI_DISCONNECT_SETTLE_MS 300  // pause after disconnect() before begin()
+#define WIFI_CONNECT_TIMEOUT_MS 20000  // per attempt
+#define WIFI_RETRY_BACKOFF_MS 5000     // between failed attempts
 
 // ---- Network endpoints ----
 #define OPENSKY_HOST "opensky-network.org"

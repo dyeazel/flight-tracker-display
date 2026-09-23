@@ -13,6 +13,7 @@
 #include "network/OpenSkyClient.h"
 #include "network/WifiManager.h"
 #include "render/Renderer.h"
+#include "secrets.h"
 #include "time/TimeSync.h"
 #include "watchdog/Health.h"
 #include "watchdog/WatchdogManager.h"
@@ -31,6 +32,17 @@ static void logSoakLine() {
         millis(), ESP.getFreeHeap(), ESP.getMaxAllocHeap(), Diag::bootCount(), Diag::lifetimeOk(),
         Diag::lifetimeFail(), Diag::lifetimeWifiReconnects());
 }
+
+// Health::Hooks::isBusy: a scheduled reboot is deferred while flights are on screen. No isWifiConfigured
+// hook - flight-tracker's WiFi credentials are compile-time (secrets.h), always "configured".
+static bool flightsVisible() { return NetTask::lastPublishedCount() > 0; }
+
+// WifiManager::Credentials: compile-time secrets.h values, unlike ../../cyd-common's other consumer
+// (mlb-board), which sources these from its NVS-backed ConfigStore. reconfigure() is never called here.
+static bool wifiHasCreds() { return true; }
+static const char *wifiSsid() { return WIFI_SSID; }
+static bool wifiHasPass() { return WIFI_PASSWORD[0] != '\0'; }
+static const char *wifiPass() { return WIFI_PASSWORD; }
 
 // Shown only until the very first successful publish ever - after that, main() always has real flights to
 // draw (see loop()) and never falls back to this again, even through a long outage (the stale heartbeat
@@ -82,14 +94,19 @@ void setup() {
     TimeSync::begin();
     Serial.println("[time] NTP sync requested");
 
+    WifiManager::begin({wifiHasCreds, wifiSsid, wifiHasPass, wifiPass});
+
 #ifdef SIM_DATA
-    // Scripted scenes need no network task - just wifi (for NTP, so relative dep/arr times work) and time
-    // sync, both via the old simple blocking call; see network/WifiManager.h.
-    WifiManager::connect();
+    // Scripted scenes need no network task - just wifi (for NTP, so relative dep/arr times work) and
+    // time sync. No NetTask to keep responsive here, so a simple blocking wait is fine.
+    while (!WifiManager::isConnected()) {
+        WifiManager::update();
+        delay(50);
+    }
     Serial.print("[wifi] connected! IP: ");
     Serial.println(WiFi.localIP());
 #else
-    Health::begin();
+    Health::begin({nullptr, flightsVisible});
     NetTask::begin();  // owns WiFi connect/reconnect and all fetching from here on
     Serial.println("[net] task started");
 #endif

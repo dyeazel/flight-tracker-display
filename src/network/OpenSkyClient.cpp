@@ -8,7 +8,7 @@
 
 #include "OpenSkyParse.h"
 #include "config.h"
-#include "diag/Diag.h"
+#include "diag/NetStats.h"
 #include "flight/FlightMath.h"
 #include "secrets.h"
 

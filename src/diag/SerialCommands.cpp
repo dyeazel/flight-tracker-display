@@ -7,6 +7,7 @@
 
 #include "config.h"
 #include "diag/Diag.h"
+#include "diag/NetStats.h"
 #include "flight/FlightMath.h"
 #include "network/AdsbdbClient.h"
 #include "network/WifiManager.h"
@@ -96,7 +97,10 @@ void handleLine(const char *line) {
         JsonDocument d;
         d["ok"] = true;
         d["cmd"] = "diag";
-        Diag::fillDiag(d);
+        Diag::fillDiag(d);              // shared base fields (../../cyd-common)
+        Diag::fillNetworkDiag(d);       // this app's per-source network timing (sources/last_failure)
+        d["debug"] = DEBUG;
+        d["wifi_reconnects"] = Diag::lifetimeWifiReconnects();
 #ifndef SIM_DATA
         d["net_task_ms_since_loop"] = NetTask::msSinceLoop();
         d["net_task_stack_free_min"] = NetTask::stackFreeMin();
@@ -139,6 +143,7 @@ void handleLine(const char *line) {
     }
     if (!strcmp(cmd, "_resetdiag")) {
         Diag::testResetCounters();
+        Diag::testResetNetworkStats();
         return replyOk("_resetdiag");
     }
 #ifdef SIM_DATA

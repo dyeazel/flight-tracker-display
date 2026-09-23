@@ -8,7 +8,7 @@
 
 #include "AeroDataBoxParse.h"
 #include "config.h"
-#include "diag/Diag.h"
+#include "diag/NetStats.h"
 #include "secrets.h"
 
 namespace {

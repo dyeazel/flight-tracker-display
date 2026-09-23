@@ -81,17 +81,15 @@ void pollIfDue() {
     gPolling = false;
 }
 
-// Refreshes this task's own liveness mark during a (potentially long, unbounded-retry) WiFi connect -
-// keeps a legitimately-still-retrying connect from looking "stuck" to Health's net-stuck check, which is
-// a distinct condition from "wifi down" (WifiManager::isConnected() has its own, separate threshold).
-void onWifiProgress() { gLoopMs = millis(); }
-
 void taskMain(void *) {
     bool everConnected = false;
     for (;;) {
+        // gLoopMs refreshes every tick regardless of WiFi state now that WifiManager::update() is
+        // non-blocking (see network/WifiManager.h) - no separate progress-callback hack needed the way
+        // a blocking connect() used to require.
         gLoopMs = millis();
-        if (!WifiManager::isConnected()) {
-            WifiManager::connect(nullptr, onWifiProgress);
+        WifiManager::update();
+        if (WifiManager::takeJustConnected()) {
             if (everConnected) {
                 Diag::noteWifiReconnect();
                 Serial.print("[wifi] reconnected! IP: ");
@@ -100,9 +98,8 @@ void taskMain(void *) {
             }
             Serial.println(WiFi.localIP());
             everConnected = true;
-        } else {
-            pollIfDue();
         }
+        if (WifiManager::isConnected()) pollIfDue();
         vTaskDelay(pdMS_TO_TICKS(100));
     }
 }

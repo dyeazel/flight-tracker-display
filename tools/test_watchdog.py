@@ -204,6 +204,10 @@ def main():
               connected_flags and all(c is False for c in connected_flags), connected_flags)
         check("board restarted (wifi down)", line is not None)
         check("reason recognised as 'wifi down'", line and "wifi down" in line, line)
+        # The non-blocking WifiManager state machine takes Idle -> Settling (300ms) -> Connecting ->
+        # a real handshake (typically 1-3s) to reconnect after a fresh boot - give it real time before
+        # checking, or "after" can land mid-handshake and wrongly look like the link never came back.
+        time.sleep(5)
         after = diag(s)
         check("wifi down counter incremented", after["restarts"]["wifi down"] == before["restarts"]["wifi down"] + 1, after["restarts"])
         check("the real link was never actually touched - wifi_connected is true again on the fresh boot",
