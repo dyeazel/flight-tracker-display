@@ -10,6 +10,7 @@
 #include "diag/NetStats.h"
 #include "flight/FlightMath.h"
 #include "network/AdsbdbClient.h"
+#include "network/RouteCache.h"
 #include "network/WifiManager.h"
 #include "time/TimeSync.h"
 #ifndef SIM_DATA
@@ -101,6 +102,12 @@ void handleLine(const char *line) {
         Diag::fillNetworkDiag(d);       // this app's per-source network timing (sources/last_failure)
         d["debug"] = DEBUG;
         d["wifi_reconnects"] = Diag::lifetimeWifiReconnects();
+        // Visibility for RouteCache's tightly-tracked AeroDataBox budget (config.h's
+        // ROUTE_PROVIDER_MONTHLY_BUDGET) - added after Phase 6's "measure first" review found no real
+        // usage this session to justify LittleFS-persisting the route cache itself; this at least lets
+        // a future session check actual spend before deciding whether that's still true.
+        d["aerodatabox_budget_used"] = RouteCache::budgetUsedThisMonth();
+        d["aerodatabox_budget_month"] = RouteCache::budgetMonthNumber();
 #ifndef SIM_DATA
         d["net_task_ms_since_loop"] = NetTask::msSinceLoop();
         d["net_task_stack_free_min"] = NetTask::stackFreeMin();

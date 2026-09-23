@@ -214,4 +214,14 @@ bool lookupActiveLeg(const char *callsign, RouteLeg *out) {
     return pickActiveLeg(*entry, now, out);
 }
 
+uint32_t budgetUsedThisMonth() {
+    loadBudget();
+    return budgetCount;
+}
+
+uint32_t budgetMonthNumber() {
+    loadBudget();
+    return budgetMonth;
+}
+
 }  // namespace RouteCache

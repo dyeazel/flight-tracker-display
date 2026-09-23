@@ -21,4 +21,13 @@ namespace RouteCache {
 // fresh fetch and nothing is cached yet either.
 bool lookupActiveLeg(const char *callsign, RouteLeg *out);
 
+// AeroDataBox requests spent this local calendar month (see config.h's ROUTE_PROVIDER_MONTHLY_BUDGET)
+// and which month that count is for (yyyymm local, 0 if never loaded - e.g. TimeSync not yet synced,
+// so budgetMonthNumber() can't be compared against "the current month" meaningfully yet either). Loads
+// the persisted NVS counter on first call if lookupActiveLeg() hasn't already. For the serial "diag"
+// reply, so a long-running board can be checked for budget headroom without waiting for it to actually
+// run out and start silently failing new lookups.
+uint32_t budgetUsedThisMonth();
+uint32_t budgetMonthNumber();
+
 }  // namespace RouteCache
