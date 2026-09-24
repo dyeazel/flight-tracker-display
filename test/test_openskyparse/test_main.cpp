@@ -2,10 +2,17 @@
 #include <string.h>
 #include <unity.h>
 
+#include "config.h"
+#include "config/CallsignList.h"
 #include "network/OpenSkyParse.h"
 
 void setUp() {}
 void tearDown() {}
+
+// This project's HOME_LAT/HOME_LON default (config.h) - passed explicitly now that parseStates() takes
+// home position as a parameter (Phase 7: ConfigStore can override it at runtime) rather than reading the
+// macro directly.
+constexpr float kHomeLat = 43.184601f, kHomeLon = -88.990422f;
 
 // Real response captured live from opensky-network.org/api/states/all (2026-09-22), a box around
 // O'Hare (~100mi from this project's HOME_LAT/HOME_LON) - includes real ground traffic (on_ground=true,
@@ -31,7 +38,7 @@ void test_parses_real_states_sorted_by_distance_ascending() {
 
     Flight out[10];
     int count = 0;
-    OpenSkyParse::parseStates(doc.as<JsonVariant>(), /*radiusMi=*/150.0f, out, 10, &count);
+    OpenSkyParse::parseStates(doc.as<JsonVariant>(), /*radiusMi=*/150.0f, kHomeLat, kHomeLon, out, 10, &count, nullptr, 0);
 
     TEST_ASSERT_EQUAL(5, count);  // the short row and the missing-lat/lon row are both skipped
     // Closest-first: AAL1985 (98.2mi) < SKW4740 (99.8) < AAL2302 (100.4) < RPA3512 (109.3) < ENY4275 (113.9).
@@ -48,7 +55,7 @@ void test_callsign_trailing_space_trimmed() {
     TEST_ASSERT_FALSE(deserializeJson(doc, kStatesNearOrd));
     Flight out[10];
     int count = 0;
-    OpenSkyParse::parseStates(doc.as<JsonVariant>(), 150.0f, out, 10, &count);
+    OpenSkyParse::parseStates(doc.as<JsonVariant>(), 150.0f, kHomeLat, kHomeLon, out, 10, &count, nullptr, 0);
     for (int i = 0; i < count; i++) {
         TEST_ASSERT_TRUE(out[i].callsign[strlen(out[i].callsign) - 1] != ' ');
     }
@@ -60,7 +67,7 @@ void test_radius_filters_out_farther_flights() {
     Flight out[10];
     int count = 0;
     // 105mi excludes RPA3512 (109.3mi) and ENY4275 (113.9mi), keeps the other three.
-    OpenSkyParse::parseStates(doc.as<JsonVariant>(), 105.0f, out, 10, &count);
+    OpenSkyParse::parseStates(doc.as<JsonVariant>(), 105.0f, kHomeLat, kHomeLon, out, 10, &count, nullptr, 0);
     TEST_ASSERT_EQUAL(3, count);
     for (int i = 0; i < count; i++) TEST_ASSERT_TRUE(out[i].distanceMi <= 105.0f);
 }
@@ -70,7 +77,7 @@ void test_max_out_caps_result_count_to_closest() {
     TEST_ASSERT_FALSE(deserializeJson(doc, kStatesNearOrd));
     Flight out[2];
     int count = 0;
-    OpenSkyParse::parseStates(doc.as<JsonVariant>(), 150.0f, out, 2, &count);
+    OpenSkyParse::parseStates(doc.as<JsonVariant>(), 150.0f, kHomeLat, kHomeLon, out, 2, &count, nullptr, 0);
     TEST_ASSERT_EQUAL(2, count);
     TEST_ASSERT_EQUAL_STRING("AAL1985", out[0].callsign);  // the two closest, still ascending
     TEST_ASSERT_EQUAL_STRING("SKW4740", out[1].callsign);
@@ -81,7 +88,7 @@ void test_unit_conversions_match_known_row() {
     TEST_ASSERT_FALSE(deserializeJson(doc, kStatesNearOrd));
     Flight out[10];
     int count = 0;
-    OpenSkyParse::parseStates(doc.as<JsonVariant>(), 150.0f, out, 10, &count);
+    OpenSkyParse::parseStates(doc.as<JsonVariant>(), 150.0f, kHomeLat, kHomeLon, out, 10, &count, nullptr, 0);
     const Flight *eny = nullptr;
     for (int i = 0; i < count; i++) {
         if (strcmp(out[i].callsign, "ENY4275") == 0) eny = &out[i];
@@ -101,7 +108,7 @@ void test_on_ground_row_has_no_altitude_but_can_still_have_ground_track() {
     TEST_ASSERT_FALSE(deserializeJson(doc, kStatesNearOrd));
     Flight out[10];
     int count = 0;
-    OpenSkyParse::parseStates(doc.as<JsonVariant>(), 150.0f, out, 10, &count);
+    OpenSkyParse::parseStates(doc.as<JsonVariant>(), 150.0f, kHomeLat, kHomeLon, out, 10, &count, nullptr, 0);
     const Flight *skw = nullptr;
     for (int i = 0; i < count; i++) {
         if (strcmp(out[i].callsign, "SKW4740") == 0) skw = &out[i];
@@ -115,12 +122,30 @@ void test_on_ground_row_has_no_altitude_but_can_still_have_ground_track() {
     TEST_ASSERT_EQUAL(0, skw->altitudeFt);  // baro_altitude null -> 0, per fetchOnce()'s "baroAlt ? .. : 0"
 }
 
+// Phase 7: tracked callsigns are runtime-configurable (ConfigStore) but threaded through as a parameter
+// here so parseStates() stays pure/native-testable - this exercises the "track specific flights" branch
+// that was previously unreachable in this deployment's tests (TARGET_CALLSIGNS_COUNT was always 0). The
+// radius filter still applies here (it always has - see the code above the target-callsign check); it's
+// the caller's job to pass a wide radius when tracking specific flights (FlightMath::effectiveRadius()
+// returns CALLSIGN_SEARCH_RADIUS_MI whenever the tracked list is non-empty), which this test mirrors.
+void test_target_callsigns_filters_to_matches_within_radius() {
+    JsonDocument doc;
+    TEST_ASSERT_FALSE(deserializeJson(doc, kStatesNearOrd));
+    Flight out[10];
+    int count = 0;
+    CallsignList::Buf targets[2] = {"AAL1985", "ZZZ9999"};  // one match (~98mi), one absent
+    OpenSkyParse::parseStates(doc.as<JsonVariant>(), /*radiusMi=*/CALLSIGN_SEARCH_RADIUS_MI, kHomeLat,
+                               kHomeLon, out, 10, &count, targets, 2);
+    TEST_ASSERT_EQUAL(1, count);
+    TEST_ASSERT_EQUAL_STRING("AAL1985", out[0].callsign);
+}
+
 void test_null_states_yields_zero_flights() {
     JsonDocument doc;
     TEST_ASSERT_FALSE(deserializeJson(doc, kNoStates));
     Flight out[10];
     int count = -1;
-    OpenSkyParse::parseStates(doc.as<JsonVariant>(), 150.0f, out, 10, &count);
+    OpenSkyParse::parseStates(doc.as<JsonVariant>(), 150.0f, kHomeLat, kHomeLon, out, 10, &count, nullptr, 0);
     TEST_ASSERT_EQUAL(0, count);
 }
 
@@ -164,6 +189,7 @@ int main() {
     RUN_TEST(test_parses_real_states_sorted_by_distance_ascending);
     RUN_TEST(test_callsign_trailing_space_trimmed);
     RUN_TEST(test_radius_filters_out_farther_flights);
+    RUN_TEST(test_target_callsigns_filters_to_matches_within_radius);
     RUN_TEST(test_max_out_caps_result_count_to_closest);
     RUN_TEST(test_unit_conversions_match_known_row);
     RUN_TEST(test_on_ground_row_has_no_altitude_but_can_still_have_ground_track);

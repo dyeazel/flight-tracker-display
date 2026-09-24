@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "config.h"
+#include "config/ConfigStore.h"
 #include "diag/Diag.h"
 #include "flight/FlightMath.h"
 #include "flight/FlightSelector.h"
@@ -62,7 +63,7 @@ void pollIfDue() {
     if ((int32_t)(millis() - gNextPollMs) < 0) return;
     gPolling = true;
 
-    const float radius = FlightMath::effectiveRadius();
+    const float radius = FlightMath::effectiveRadius(ConfigStore::radiusOverrideMi(), ConfigStore::callsignCount());
     const int count = OpenSkyClient::fetchNearby(radius, gWorking, MAX_ROWS);
     if (count < 0) {
         Diag::noteCycle(false);
@@ -73,7 +74,10 @@ void pollIfDue() {
     }
     Diag::noteCycle(true);
 
-    const int missingCount = FlightSelector::findMissing(gWorking, count, gWorkingMissing, MAX_ROWS);
+    CallsignList::Buf targets[CallsignList::kMax];
+    const int targetCount = ConfigStore::callsigns(targets);
+    const int missingCount =
+        FlightSelector::findMissing(gWorking, count, gWorkingMissing, MAX_ROWS, targets, targetCount);
     const bool anyFlagged = FlightSelector::enrich(gWorking, count);
     FlightSelector::sortCommercialFirst(gWorking, count);
     publish(gWorking, count, gWorkingMissing, missingCount, anyFlagged);

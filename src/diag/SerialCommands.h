@@ -7,16 +7,28 @@
 // command set. Same shape as ../mlb-board's SetupSerial (hello/get/diag/reboot), so shared host tools
 // work on both.
 //
-//   {"cmd":"hello"}            -> {"ok":true,"cmd":"hello","fw":"...","board":"cyd","proto":1}
+//   {"cmd":"hello"}            -> {"ok":true,"cmd":"hello","fw":"...","board":"cyd","proto":2,
+//                                  "maxCallsigns":8}
 //   {"cmd":"get"}              -> {"ok":true,"cmd":"get","debug":false,"radius_mi":50.0,"refresh_s":30,
-//                                  "wifi":true,"ip":"..","time_synced":true}
+//                                  "wifi":true,"wifi_state":"connected","failure":"","ip":"..",
+//                                  "time_synced":true,"ssid":"..","hasPass":true,"lat":43.18,"lon":-88.99,
+//                                  "callsigns":["UAL1217"]}                  (never returns the password)
+//   {"cmd":"set","ssid":"..","pass":"..","lat":43.18,"lon":-88.99,"radius_mi":50.0,
+//    "callsigns":["UAL1217"]}
+//        Phase 7 (web/config.html, Web Serial), mirrors ../../mlb-board's SetupSerial. "pass" optional:
+//        omitted keeps the stored one, "" means an open network. "radius_mi" optional: omitted/RADIUS_MI_AUTO
+//        means auto (see FlightMath::effectiveRadius) - forced wide anyway whenever "callsigns" is
+//        non-empty. "callsigns": 0-8 tracked flight callsigns; empty means "show whatever's nearby".
+//   {"cmd":"scan"}             -> {"ok":true,"cmd":"scan","networks":[{"ssid":"..","rssi":-50,"secure":true}]}
+//   {"cmd":"forget"}           erases WiFi credentials (back to the setup screen)
 //   {"cmd":"diag"}             -> uptime, boot reason, restart counts, heap, poll counters, per-source network
 //                                 timing and the last failure (see Diag::fillDiag)
 //   {"cmd":"debug"}            -> {"ok":true,"cmd":"debug","on":false}       (query)
 //   {"cmd":"debug","on":true}  -> {"ok":true,"cmd":"debug","on":true}        (explicit, idempotent - the old
 //                                 stateful 'd' toggle made scripted use error-prone)
 //   {"cmd":"reboot"}           -> reply, then a clean restart recorded as reason "user"
-// Failures: {"ok":false,"cmd":"..","error":"bad_json|too_long|unknown_cmd"}
+// Failures: {"ok":false,"cmd":"..","error":"bad_json|too_long|unknown_cmd|bad_ssid|bad_pass|bad_lat|
+//           bad_lon|bad_radius|bad_callsign|too_many_callsigns|duplicate_callsign|scan_failed"}
 //
 // Bench-test commands, compiled only into TEST_HOOKS builds (env:esp32dev-test), to force failure paths on
 // real hardware: _hang (stops calling WatchdogManager::markProgress - the UI task, so this now tests the

@@ -23,9 +23,10 @@ float bearingDeg(float lat1, float lon1, float lat2, float lon2);
 void boundingBox(float lat, float lon, float radiusMi, float *outLamin,
                   float *outLamax, float *outLomin, float *outLomax);
 
-// RADIUS_MI override, else CALLSIGN_SEARCH_RADIUS_MI if TARGET_CALLSIGNS is
-// non-empty, else DEFAULT_RADIUS_MI.
-float effectiveRadius();
+// radiusOverrideMi (ConfigStore::radiusOverrideMi()) if set (not RADIUS_MI_AUTO), else
+// CALLSIGN_SEARCH_RADIUS_MI if targetCallsignCount is non-zero, else DEFAULT_RADIUS_MI. Takes these as
+// parameters (rather than reading ConfigStore directly) so this stays a pure, native-testable function.
+float effectiveRadius(float radiusOverrideMi, int targetCallsignCount);
 
 // True for callsigns that look like a scheduled flight number (3-letter
 // code + digit) AND aren't a known charter/fractional-ownership prefix.
@@ -57,7 +58,8 @@ const char *cardinalDirection(float brg);
 // at the last real OpenSky poll) forward by elapsedS seconds, using its
 // heading/speed/vertical-rate at that fix. Skips aircraft on the ground,
 // too slow for a heading to be meaningful (MIN_DEAD_RECKON_KT), or with
-// no heading. Mutates flights in place.
-void applyDeadReckoning(Flight *flights, int count, float elapsedS);
+// no heading. Mutates flights in place. homeLat/homeLon (ConfigStore::lat()/lon()) recompute distanceMi
+// from the new position - passed in rather than read from ConfigStore directly so this stays pure.
+void applyDeadReckoning(Flight *flights, int count, float elapsedS, float homeLat, float homeLon);
 
 }  // namespace FlightMath

@@ -1,6 +1,7 @@
 #include <math.h>
 #include <unity.h>
 
+#include "config.h"
 #include "flight/FlightMath.h"
 
 void setUp() {}
@@ -147,6 +148,24 @@ void test_route_plausible_heading_ignored_below_min_speed() {
     TEST_ASSERT_TRUE(plausible);
 }
 
+// ---- effectiveRadius (Phase 7: takes ConfigStore's values as parameters, not compile-time macros) ----
+
+void test_effective_radius_uses_override_when_set() {
+    TEST_ASSERT_EQUAL_FLOAT(75.0f, FlightMath::effectiveRadius(75.0f, 0));
+}
+
+void test_effective_radius_defaults_when_auto_and_no_targets() {
+    TEST_ASSERT_EQUAL_FLOAT(DEFAULT_RADIUS_MI, FlightMath::effectiveRadius(RADIUS_MI_AUTO, 0));
+}
+
+void test_effective_radius_widens_when_auto_and_targets_configured() {
+    TEST_ASSERT_EQUAL_FLOAT(CALLSIGN_SEARCH_RADIUS_MI, FlightMath::effectiveRadius(RADIUS_MI_AUTO, 3));
+}
+
+void test_effective_radius_override_wins_even_with_targets_configured() {
+    TEST_ASSERT_EQUAL_FLOAT(20.0f, FlightMath::effectiveRadius(20.0f, 3));
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_haversine_same_point_is_zero);
@@ -165,5 +184,9 @@ int main() {
     RUN_TEST(test_route_implausible_on_distance_alone);
     RUN_TEST(test_route_plausible_no_heading_data);
     RUN_TEST(test_route_plausible_heading_ignored_below_min_speed);
+    RUN_TEST(test_effective_radius_uses_override_when_set);
+    RUN_TEST(test_effective_radius_defaults_when_auto_and_no_targets);
+    RUN_TEST(test_effective_radius_widens_when_auto_and_targets_configured);
+    RUN_TEST(test_effective_radius_override_wins_even_with_targets_configured);
     return UNITY_END();
 }

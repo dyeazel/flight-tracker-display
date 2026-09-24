@@ -3,7 +3,6 @@
 #include <math.h>
 #include <string.h>
 
-#include "config.h"
 #include "flight/FlightMath.h"
 
 namespace OpenSkyParse {
@@ -35,7 +34,9 @@ void insertSorted(Flight *arr, int &count, int maxCount, const Flight &f) {
 
 }  // namespace
 
-void parseStates(JsonVariant root, float radiusMi, Flight *outFlights, int maxOut, int *outCount) {
+void parseStates(JsonVariant root, float radiusMi, float homeLat, float homeLon, Flight *outFlights,
+                  int maxOut, int *outCount, const CallsignList::Buf *targetCallsigns,
+                  int targetCallsignCount) {
     *outCount = 0;
     JsonArray states = root["states"].as<JsonArray>();
     for (JsonArray s : states) {
@@ -52,7 +53,7 @@ void parseStates(JsonVariant root, float radiusMi, Flight *outFlights, int maxOu
         float heading = hasHeading ? s[10].as<float>() : 0;
         float vrate = s[11].isNull() ? 0 : s[11].as<float>();
 
-        float dist = FlightMath::haversineMiles(HOME_LAT, HOME_LON, lat, lon);
+        float dist = FlightMath::haversineMiles(homeLat, homeLon, lat, lon);
         if (dist > radiusMi) continue;
 
         Flight f;
@@ -80,13 +81,13 @@ void parseStates(JsonVariant root, float radiusMi, Flight *outFlights, int maxOu
         f.heading = heading;
         f.vrateFpm = vrate ? roundf(vrate * 196.85f) : 0;
 
-        if (TARGET_CALLSIGNS_COUNT > 0) {
+        if (targetCallsignCount > 0) {
             // Tracking specific callsigns: keep only matches, in
             // arrival order (not distance-sorted - a tracked
             // flight could be anywhere), up to maxOut.
             bool isTarget = false;
-            for (int ti = 0; ti < TARGET_CALLSIGNS_COUNT; ti++) {
-                if (strcmp(f.callsign, TARGET_CALLSIGNS[ti]) == 0) {
+            for (int ti = 0; ti < targetCallsignCount; ti++) {
+                if (strcmp(f.callsign, targetCallsigns[ti]) == 0) {
                     isTarget = true;
                     break;
                 }

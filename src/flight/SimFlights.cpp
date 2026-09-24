@@ -7,6 +7,7 @@
 
 #include "FlightMath.h"
 #include "config.h"
+#include "config/ConfigStore.h"
 
 namespace SimFlights {
 
@@ -27,7 +28,7 @@ void copy(char *dst, size_t n, const char *src) {
 
 // Places the flight `distMi` from home on compass bearing `brg` (so the bearing column reads sensibly).
 void placeAt(Flight &f, float brg, float distMi) {
-    FlightMath::deadReckon(HOME_LAT, HOME_LON, brg, distMi / 1.15078f, 3600.0f, &f.lat, &f.lon);
+    FlightMath::deadReckon(ConfigStore::lat(), ConfigStore::lon(), brg, distMi / 1.15078f, 3600.0f, &f.lat, &f.lon);
     f.distanceMi = distMi;
 }
 

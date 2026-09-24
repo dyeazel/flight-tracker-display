@@ -1,0 +1,595 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flight Tracker Setup</title>
+<style>
+  :root {
+    --bg: #f5f6f8; --card: #ffffff; --text: #1a1d21; --muted: #5d6673; --line: #d9dde3;
+    --accent: #0b5fff; --accent-text: #ffffff; --ok: #12703a; --ok-bg: #e4f6ea;
+    --err: #b3261e; --err-bg: #fdeceb; --info-bg: #eaf1ff; --warn: #8a6100; --warn-bg: #fff6e0;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14161a; --card: #1e2126; --text: #eceff3; --muted: #9aa3af; --line: #343a42;
+      --accent: #5b8cff; --accent-text: #0a0f1a; --ok: #6bd394; --ok-bg: #12301f;
+      --err: #ff8a80; --err-bg: #3a1917; --info-bg: #16233d; --warn: #e0b34d; --warn-bg: #332a10;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 16px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 34rem; margin: 0 auto; padding: 1.5rem 1rem 3rem; }
+  h1 { font-size: 1.5rem; margin: 0 0 .25rem; }
+  .sub { color: var(--muted); margin: 0 0 1.25rem; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+          padding: 1.1rem; margin-bottom: 1rem; }
+  h2 { font-size: 1.05rem; margin: 0 0 .75rem; }
+  label { display: block; font-weight: 600; margin: .9rem 0 .3rem; }
+  input[type=text], input[type=number], input[type=password], select {
+    width: 100%; padding: .6rem .7rem; font: inherit; color: var(--text); background: var(--bg);
+    border: 1px solid var(--line); border-radius: 8px; }
+  input:focus, select:focus, button:focus-visible, summary:focus-visible {
+    outline: 3px solid var(--accent); outline-offset: 1px; }
+  .row { display: flex; gap: .5rem; align-items: stretch; }
+  .row > :first-child { flex: 1; min-width: 0; }
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: .6rem; }
+  button { font: inherit; font-weight: 600; padding: .6rem 1rem; border-radius: 8px; cursor: pointer;
+           border: 1px solid var(--line); background: var(--card); color: var(--text); }
+  button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  .check { display: flex; gap: .5rem; align-items: center; font-weight: 400; margin: .5rem 0 0; }
+  .check input { width: 1.1rem; height: 1.1rem; }
+  .radio { display: flex; gap: .5rem; align-items: flex-start; font-weight: 400; margin: .5rem 0 0; }
+  .radio input { width: 1.1rem; height: 1.1rem; margin-top: .2rem; }
+  .radio div { flex: 1; }
+  .radio .hint { margin-top: 0; }
+  .hint { color: var(--muted); font-size: .875rem; margin: .3rem 0 0; }
+  .msg { border-radius: 8px; padding: .7rem .9rem; margin: .9rem 0 0; }
+  .msg.ok { background: var(--ok-bg); color: var(--ok); }
+  .msg.err { background: var(--err-bg); color: var(--err); }
+  .msg.info { background: var(--info-bg); }
+  .msg.warn { background: var(--warn-bg); color: var(--warn); }
+  .status { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+  .dot { width: .7rem; height: .7rem; border-radius: 50%; background: var(--muted); flex: none; }
+  .dot.on { background: var(--ok); }
+  .actions { display: flex; gap: .5rem; margin-top: 1.1rem; flex-wrap: wrap; }
+  details { margin-top: .5rem; }
+  summary { cursor: pointer; color: var(--muted); }
+  pre { max-height: 14rem; overflow: auto; background: var(--bg); border: 1px solid var(--line);
+        border-radius: 8px; padding: .6rem; font-size: .8rem; white-space: pre-wrap; word-break: break-all; }
+  fieldset { border: 0; padding: 0; margin: .9rem 0 0; min-width: 0; }
+  legend { font-weight: 600; padding: 0; margin-bottom: .3rem; }
+  .crow { display: grid; grid-template-columns: 1fr auto auto; gap: .4rem; align-items: center; margin-top: .5rem; }
+  .crow .state { font-size: 1rem; width: 1.4rem; text-align: center; }
+  #addCallsign { margin-top: .7rem; }
+  [hidden] { display: none !important; }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Flight Tracker Setup</h1>
+  <p class="sub">Set your WiFi network, home location, and which flights to show on your flight tracker over a USB cable.</p>
+
+  <div id="unsupported" class="card" hidden>
+    <h2>This browser can't talk to USB devices</h2>
+    <p>Setup uses the Web Serial feature, which is available in <strong>Chrome</strong> and
+       <strong>Edge</strong> on a computer (not Safari, Firefox, or phones). Open this page in one of those browsers.</p>
+  </div>
+
+  <section id="app">
+    <div class="card" id="connectCard">
+      <h2>1. Connect your flight tracker</h2>
+      <p>Plug the flight tracker into this computer with a USB cable, then press Connect. In the list that opens,
+         choose the entry named <strong>USB Serial</strong> (some boards show <strong>CP210x</strong> or <strong>CH340</strong> instead).
+         It only appears while the board is plugged in.</p>
+      <div class="actions">
+        <button class="primary" id="connectBtn">Connect</button>
+        <button id="disconnectBtn" hidden>Disconnect</button>
+      </div>
+      <p class="hint"><a href="#" id="allPorts">Don't see it in the list? Show all serial ports.</a></p>
+      <div id="connectMsg" class="msg info" hidden role="status"></div>
+      <div class="status" id="deviceStatus" hidden style="margin-top:.9rem">
+        <span class="dot" id="wifiDot"></span><span id="wifiText"></span>
+      </div>
+    </div>
+
+    <form class="card" id="form" hidden autocomplete="off">
+      <h2>2. WiFi network</h2>
+
+      <label for="ssid">WiFi network name</label>
+      <div class="row">
+        <input type="text" id="ssid" maxlength="32" autocapitalize="off" spellcheck="false" required>
+        <button type="button" id="scanBtn">Scan</button>
+      </div>
+      <select id="found" aria-label="Nearby networks" hidden></select>
+      <p class="hint" id="scanHint">Type your network name, or press Scan to pick from nearby networks (takes about 10 seconds). 2.4&nbsp;GHz networks only.</p>
+
+      <label for="pass">WiFi password</label>
+      <div class="row">
+        <input type="password" id="pass" maxlength="63" autocomplete="new-password" autocapitalize="off" spellcheck="false">
+        <button type="button" id="showPass" aria-pressed="false">Show</button>
+      </div>
+      <label class="check"><input type="checkbox" id="openNet"> This network has no password</label>
+      <p class="hint" id="passHint"></p>
+
+      <fieldset id="locationSet">
+        <legend>Home location</legend>
+        <p class="hint">Where the flight tracker itself is - distances and directions on screen are measured from here.</p>
+        <div class="cols">
+          <div><label for="lat">Latitude</label><input type="number" id="lat" step="any" min="-90" max="90" required></div>
+          <div><label for="lon">Longitude</label><input type="number" id="lon" step="any" min="-180" max="180" required></div>
+        </div>
+        <div class="actions"><button type="button" id="useLocation">Use my current location</button></div>
+        <p class="hint" id="locHint"></p>
+      </fieldset>
+
+      <fieldset id="modeSet">
+        <legend>What to show</legend>
+        <label class="radio">
+          <input type="radio" name="mode" id="modeNearby" value="nearby">
+          <div>Nearby flights<div class="hint">Show whatever aircraft are within range of the home location above.</div></div>
+        </label>
+        <div id="radiusRow" style="margin-left: 1.6rem">
+          <label for="radius" style="margin-top:.6rem">Search radius (miles)</label>
+          <input type="number" id="radius" min="1" max="20000" step="1">
+          <label class="check"><input type="checkbox" id="radiusAuto"> Auto (recommended)</label>
+        </div>
+        <label class="radio">
+          <input type="radio" name="mode" id="modeSpecific" value="specific">
+          <div>Track specific flights<div class="hint">Only show these callsigns, wherever they are - the search radius above is ignored.</div></div>
+        </label>
+        <div id="callsignRows"></div>
+        <div class="actions" id="addCallsign"><button type="button" id="addCallsignBtn">+ Add a flight</button></div>
+        <p class="hint" id="callsignsNote" hidden></p>
+      </fieldset>
+
+      <div class="actions"><button class="primary" type="submit" id="saveBtn">Save to flight tracker</button></div>
+      <div id="saveMsg" class="msg" hidden role="status" aria-live="polite"></div>
+    </form>
+
+    <details>
+      <summary>Technical log</summary>
+      <pre id="log"></pre>
+    </details>
+  </section>
+</main>
+
+<script>
+"use strict";
+
+const MAX_CALLSIGNS_DEFAULT = 8;   // the firmware reports its own limit in "hello" (maxCallsigns); this is the default
+// Common USB-serial chips on ESP32 boards: Silicon Labs CP210x, WCH CH340/CH9102, FTDI, Espressif native USB.
+const USB_FILTERS = [{ usbVendorId: 0x10c4 }, { usbVendorId: 0x1a86 }, { usbVendorId: 0x0403 }, { usbVendorId: 0x303a }];
+const RADIUS_AUTO = -1.0;   // must match config.h's RADIUS_MI_AUTO
+
+const $ = (id) => document.getElementById(id);
+const enc = new TextEncoder();
+
+// Friendly name of the USB-serial chip from the port's vendor id (the browser can't read the device's own name).
+const CHIPS = { 0x1a86: "WCH CH340/CH9102 chip", 0x10c4: "Silicon Labs CP210x chip", 0x0403: "FTDI chip", 0x303a: "Espressif USB" };
+function chipName(port) {
+  const info = port.getInfo ? port.getInfo() : {};
+  return CHIPS[info.usbVendorId] || (info.usbVendorId ? "USB device " + info.usbVendorId.toString(16).padStart(4, "0") : "serial device");
+}
+
+// ---- Device link: newline-delimited JSON over Web Serial ----
+class Device {
+  constructor() { this.port = null; this.writer = null; this.reader = null; this.pending = null; this.onLog = () => {}; this.onClose = () => {}; }
+
+  async open(port) {
+    this.port = port;
+    await port.open({ baudRate: 115200 });
+    // Opening the port usually resets the board (DTR/RTS); we simply wait for it to boot in hello().
+    try { await port.setSignals({ dataTerminalReady: false, requestToSend: false }); } catch (_) {}
+    this.writer = port.writable.getWriter();
+    this._loop = this._readLoop();
+  }
+
+  async _readLoop() {
+    const dec = new TextDecoder();
+    let buf = "";
+    try {
+      this.reader = this.port.readable.getReader();
+      for (;;) {
+        const { value, done } = await this.reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let i;
+        while ((i = buf.indexOf("\n")) >= 0) {
+          this._line(buf.slice(0, i).replace(/\r$/, ""));
+          buf = buf.slice(i + 1);
+        }
+        if (buf.length > 4096) buf = "";
+      }
+    } catch (e) {
+      this.onLog("read error: " + e.message);
+    } finally {
+      try { this.reader && this.reader.releaseLock(); } catch (_) {}
+      this.onClose();
+    }
+  }
+
+  _line(line) {
+    if (!line) return;
+    this.onLog(line);
+    if (line[0] !== "{") return;  // device debug logs start with "[" - ignore for protocol purposes
+    let msg;
+    try { msg = JSON.parse(line); } catch (_) { return; }
+    if (this.pending && (msg.cmd === this.pending.cmd || msg.cmd === "")) {
+      const p = this.pending; this.pending = null; clearTimeout(p.timer); p.resolve(msg);
+    }
+  }
+
+  // Like request(), but asks again once if there is no answer. Only for read-only commands (get, hello): the board
+  // occasionally prints an unrelated log line into the middle of a reply, which makes that one reply unreadable.
+  async requestRetry(obj, timeoutMs = 4000) {
+    try { return await this.request(obj, timeoutMs); }
+    catch (e) { if (e.message !== "The flight tracker did not answer.") throw e; return this.request(obj, timeoutMs); }
+  }
+
+  // One request at a time; resolves with the reply object or rejects on timeout.
+  request(obj, timeoutMs = 4000) {
+    if (this.pending) return Promise.reject(new Error("busy"));
+    return new Promise(async (resolve, reject) => {
+      const timer = setTimeout(() => { this.pending = null; reject(new Error("The flight tracker did not answer.")); }, timeoutMs);
+      this.pending = { cmd: obj.cmd, resolve, timer };
+      try { await this.writer.write(enc.encode(JSON.stringify(obj) + "\n")); }
+      catch (e) { this.pending = null; clearTimeout(timer); reject(e); }
+    });
+  }
+
+  async close() {
+    const port = this.port;
+    this.port = null;                       // marks an intentional close (see onClose)
+    try { this.writer && this.writer.releaseLock(); } catch (_) {}
+    try { this.reader && await this.reader.cancel(); } catch (_) {}
+    // The port can only be closed after the read loop has released its lock on the stream;
+    // closing earlier fails silently and leaves the port held by this page.
+    try { this._loop && await this._loop; } catch (_) {}
+    try { port && await port.close(); } catch (e) { this.onLog("port close failed: " + e.message); }
+    this.writer = this.reader = this._loop = null;
+  }
+}
+
+// ---- UI ----
+const dev = new Device();
+let showAll = false;
+let current = null;   // last "get" reply
+
+function log(line) {
+  const pre = $("log");
+  pre.textContent += line + "\n";
+  if (pre.textContent.length > 20000) pre.textContent = pre.textContent.slice(-15000);
+  pre.scrollTop = pre.scrollHeight;
+}
+dev.onLog = log;
+
+function say(id, kind, text) {
+  const el = $(id);
+  el.hidden = !text;
+  el.className = "msg " + (kind || "info");
+  el.textContent = text || "";
+}
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// ---- Tracked-callsigns editor ----
+// Each row: { value, state } where state is "unchecked" | "checking" | "ok" | "bad" | "unverified".
+let callsigns = [];
+let caps = { proto: 2, maxCallsigns: MAX_CALLSIGNS_DEFAULT };
+
+const maxCallsigns = () => caps.maxCallsigns || MAX_CALLSIGNS_DEFAULT;
+const STATE_ICON = { unchecked: "", checking: "…", ok: "✓", bad: "✕", unverified: "?" };
+const STATE_TITLE = {
+  unchecked: "", checking: "Checking with adsbdb…", ok: "Recognized by adsbdb",
+  bad: "adsbdb does not recognize this callsign", unverified: "Could not check right now (adsbdb unreachable)",
+};
+
+function el(tag, props, ...kids) {
+  const e = Object.assign(document.createElement(tag), props || {});
+  e.append(...kids);
+  return e;
+}
+
+// Looks up a callsign against the same public API the firmware itself trusts for route lookups
+// (api.adsbdb.com - see config.h's ADSBDB_URL_FMT) before it's added to the tracked list, so a typo is
+// caught here instead of silently never matching anything on the device.
+async function checkCallsign(row) {
+  row.state = "checking";
+  renderCallsigns();
+  try {
+    const r = await fetch("https://api.adsbdb.com/v0/callsign/" + encodeURIComponent(row.value), { signal: AbortSignal.timeout(6000) });
+    row.state = r.status === 200 ? "ok" : r.status === 404 ? "bad" : "unverified";
+  } catch (_) {
+    row.state = "unverified";
+  }
+  renderCallsigns();
+}
+
+function renderCallsigns() {
+  const rows = $("callsignRows");
+  rows.replaceChildren();
+  callsigns.forEach((row, i) => {
+    const input = el("input", { type: "text", maxlength: 11, autocapitalize: "characters", spellcheck: false,
+                                 ariaLabel: `Flight ${i + 1} callsign`, value: row.value });
+    input.addEventListener("input", () => {
+      row.value = input.value.toUpperCase();
+      input.value = row.value;
+      row.state = "unchecked";
+      $(`state${i}`).textContent = "";
+    });
+    input.addEventListener("blur", () => { if (row.value && row.state === "unchecked") checkCallsign(row); });
+    const state = el("span", { className: "state", id: `state${i}`, textContent: STATE_ICON[row.state] || "",
+                                title: (STATE_TITLE[row.state] || "") + (row.state === "bad" || row.state === "unverified" ? " - click to check again" : "") });
+    if (row.value && (row.state === "bad" || row.state === "unverified")) {
+      state.style.cursor = "pointer";
+      state.addEventListener("click", () => checkCallsign(row));
+    }
+    const rm = el("button", { type: "button", textContent: "✕", ariaLabel: `Remove flight ${i + 1}` });
+    rm.addEventListener("click", () => { callsigns.splice(i, 1); renderCallsigns(); });
+    rows.append(el("div", { className: "crow" }, input, state, rm));
+  });
+  $("addCallsignBtn").disabled = callsigns.length >= maxCallsigns();
+  const note = $("callsignsNote");
+  note.hidden = callsigns.length < maxCallsigns();
+  note.textContent = callsigns.length >= maxCallsigns() ? `That's the maximum of ${maxCallsigns()} flights.` : "";
+}
+
+function addCallsign() {
+  if (callsigns.length >= maxCallsigns()) return;
+  callsigns.push({ value: "", state: "unchecked" });
+  renderCallsigns();
+  const inputs = $("callsignRows").querySelectorAll("input");
+  inputs[inputs.length - 1]?.focus();
+}
+
+function syncMode() {
+  const specific = $("modeSpecific").checked;
+  $("radiusRow").hidden = specific;
+  $("modeSet").querySelectorAll(".crow, #addCallsign, #callsignsNote").forEach((e) => (e.hidden = !specific));
+}
+
+function syncRadiusAuto() {
+  $("radius").disabled = $("radiusAuto").checked;
+}
+
+const FAILURES = {
+  wrong_password: "The flight tracker could not join the network: the password looks wrong.",
+  network_not_found: "The flight tracker could not find that network. Check the name (2.4 GHz networks only).",
+  timeout: "The flight tracker timed out joining the network.",
+};
+
+function showState(get) {
+  current = get;
+  $("deviceStatus").hidden = false;
+  $("wifiDot").className = "dot" + (get.wifi_state === "connected" ? " on" : "");
+  const t = {
+    connected: "WiFi connected" + (get.ip ? " (" + get.ip + ")" : ""),
+    connecting: "WiFi connecting…",
+    failed: FAILURES[get.failure] || "WiFi connection failed",
+    unconfigured: "WiFi not set up yet",
+  };
+  $("wifiText").textContent = t[get.wifi_state] || get.wifi_state;
+}
+
+function loadForm(get) {
+  $("ssid").value = get.ssid || "";
+  $("lat").value = get.lat;
+  $("lon").value = get.lon;
+  callsigns = (get.callsigns || []).map((v) => ({ value: v, state: "ok" }));
+  const specific = callsigns.length > 0;
+  $("modeNearby").checked = !specific;
+  $("modeSpecific").checked = specific;
+  const auto = !(get.radius_mi > 0);
+  $("radiusAuto").checked = auto;
+  $("radius").value = auto ? "" : get.radius_mi;
+  syncRadiusAuto();
+  syncMode();
+  renderCallsigns();
+  $("pass").value = "";
+  $("openNet").checked = false;
+  $("passHint").textContent = get.hasPass
+    ? "A password is already saved. Leave this blank to keep it."
+    : "8 to 63 characters.";
+  syncOpen();
+}
+
+function syncOpen() {
+  const open = $("openNet").checked;
+  $("pass").disabled = open;
+  if (open) $("pass").value = "";
+}
+
+async function connect() {
+  say("connectMsg", "info", "");
+  let port;
+  try {
+    port = await navigator.serial.requestPort(showAll ? {} : { filters: USB_FILTERS });
+  } catch (e) {
+    if (e.name !== "NotFoundError") say("connectMsg", "err", "Could not open the port picker: " + e.message);
+    return;   // user cancelled
+  }
+  $("connectBtn").disabled = true;
+  say("connectMsg", "info", "Connecting… the flight tracker restarts when connected; this takes a few seconds.");
+  try {
+    await dev.open(port);
+    let hello = null;
+    for (let i = 0; i < 12 && !hello; i++) {          // the board is rebooting: retry until it answers
+      try { hello = await dev.request({ cmd: "hello" }, 1000); } catch (_) { await sleep(300); }
+    }
+    if (!hello || !hello.ok) throw new Error("No answer from the flight tracker. Is it running the latest firmware?");
+    caps = { proto: hello.proto || 1, maxCallsigns: hello.maxCallsigns || MAX_CALLSIGNS_DEFAULT };
+    say("connectMsg", "ok", `Connected to your flight tracker (${chipName(port)}${hello.fw ? ", firmware " + hello.fw : ""}).`);
+    $("disconnectBtn").hidden = false;
+    $("connectBtn").hidden = true;
+    const get = await dev.requestRetry({ cmd: "get" });
+    showState(get);
+    loadForm(get);
+    $("form").hidden = false;
+  } catch (e) {
+    say("connectMsg", "err", e.message + " Check the cable and try again.");
+    await dev.close();
+    $("connectBtn").disabled = false;
+  }
+}
+
+async function disconnect() {
+  await dev.close();
+  resetUi();
+  say("connectMsg", "info", "Disconnected.");
+}
+
+function resetUi() {
+  $("form").hidden = true;
+  $("deviceStatus").hidden = true;
+  $("disconnectBtn").hidden = true;
+  $("connectBtn").hidden = false;
+  $("connectBtn").disabled = false;
+  say("saveMsg", "", "");
+}
+
+dev.onClose = () => { if (dev.port) { dev.port = null; resetUi(); say("connectMsg", "err", "The flight tracker was unplugged or the connection closed."); } };
+
+async function scan() {
+  $("scanBtn").disabled = true;
+  $("scanHint").textContent = "Scanning… (about 10 seconds; the flight tracker display pauses briefly)";
+  try {
+    const r = await dev.request({ cmd: "scan" }, 30000);
+    if (!r.ok) throw new Error(r.error);
+    const found = $("found");
+    found.replaceChildren(new Option(r.networks.length ? "Choose a nearby network…" : "No networks found", ""),
+      ...r.networks.map((n) => new Option(`${n.ssid}${n.secure ? "" : " (open)"}  ·  ${n.rssi} dBm`, n.ssid)));
+    found.hidden = !r.networks.length;
+    $("scanHint").textContent = r.networks.length
+      ? `Found ${r.networks.length} networks. Pick one from the list, or type the name yourself.`
+      : "No networks found. Type the name instead.";
+    if (r.networks.length) found.focus();
+  } catch (e) {
+    $("scanHint").textContent = "Scan failed (" + e.message + "). You can still type the network name.";
+  } finally {
+    $("scanBtn").disabled = false;
+  }
+}
+
+function useMyLocation() {
+  if (!navigator.geolocation) { $("locHint").textContent = "This browser can't share your location."; return; }
+  $("locHint").textContent = "Locating…";
+  navigator.geolocation.getCurrentPosition(
+    (pos) => {
+      $("lat").value = pos.coords.latitude.toFixed(6);
+      $("lon").value = pos.coords.longitude.toFixed(6);
+      $("locHint").textContent = "Filled in from this browser's location.";
+    },
+    (err) => { $("locHint").textContent = "Could not get your location: " + err.message; },
+    { timeout: 10000 },
+  );
+}
+
+async function save(ev) {
+  ev.preventDefault();
+  const ssid = $("ssid").value;
+  const pass = $("pass").value;
+  const open = $("openNet").checked;
+  if (!ssid || enc.encode(ssid).length > 32) return say("saveMsg", "err", "The network name must be 1 to 32 characters.");
+  if (!open && pass && (pass.length < 8 || pass.length > 63)) return say("saveMsg", "err", "The password must be 8 to 63 characters.");
+  if (!open && !pass && !(current && current.hasPass && ssid === current.ssid))
+    return say("saveMsg", "err", "Enter the WiFi password, or tick “This network has no password”.");
+
+  const lat = parseFloat($("lat").value), lon = parseFloat($("lon").value);
+  if (!Number.isFinite(lat) || lat < -90 || lat > 90) return say("saveMsg", "err", "Latitude must be between -90 and 90.");
+  if (!Number.isFinite(lon) || lon < -180 || lon > 180) return say("saveMsg", "err", "Longitude must be between -180 and 180.");
+
+  const specific = $("modeSpecific").checked;
+  const cmd = { cmd: "set", ssid, lat, lon };
+  if (specific) {
+    const values = callsigns.map((c) => c.value.trim()).filter(Boolean);
+    if (!values.length) return say("saveMsg", "err", "Add at least one flight to track, or switch to “Nearby flights”.");
+    if (callsigns.some((c) => c.state === "bad")) return say("saveMsg", "err", "One of the flights isn't recognized by adsbdb - fix or remove it.");
+    cmd.callsigns = values;
+  } else {
+    cmd.callsigns = [];
+    if (!$("radiusAuto").checked) {
+      const r = parseFloat($("radius").value);
+      if (!Number.isFinite(r) || r < 1 || r > 20000) return say("saveMsg", "err", "Search radius must be between 1 and 20000 miles, or Auto.");
+      cmd.radius_mi = r;
+    } else {
+      cmd.radius_mi = RADIUS_AUTO;
+    }
+  }
+  if (open) cmd.pass = "";                      // explicit: open network
+  else if (pass) cmd.pass = pass;               // new password; omitted = keep the stored one
+
+  $("saveBtn").disabled = true;
+  say("saveMsg", "info", "Saving…");
+  try {
+    const r = await dev.request(cmd);
+    if (!r.ok) {
+      throw new Error({
+        bad_ssid: "The network name is not valid.", bad_pass: "The password must be 8 to 63 characters.",
+        bad_lat: "Latitude is not valid.", bad_lon: "Longitude is not valid.", bad_radius: "Search radius is not valid.",
+        bad_callsign: "One of the flights is not a valid callsign.",
+        too_many_callsigns: "Too many flights: the flight tracker follows at most " + maxCallsigns() + ".",
+        duplicate_callsign: "Each flight can only be added once.",
+      }[r.error] || r.error);
+    }
+    say("saveMsg", "info", "Saved. Connecting to " + ssid + "…");
+    let last = null, misses = 0;
+    for (let i = 0; i < 25; i++) {                // up to ~50 s to join
+      await sleep(2000);
+      // The save itself already succeeded. One status poll going unanswered (the board is busy joining WiFi) must
+      // not turn that into "Could not save": just poll again.
+      try { last = await dev.requestRetry({ cmd: "get" }); } catch (_) { if (++misses >= 8) throw new Error("The flight tracker stopped answering after the save. Check its screen."); continue; }
+      showState(last);
+      if (last.wifi_state === "connected" || last.wifi_state === "failed") break;
+    }
+    if (last && last.wifi_state === "connected") {
+      say("saveMsg", "ok", "All set! The flight tracker joined “" + ssid + "” and will refresh in a moment. You can unplug the USB cable.");
+      current = last;
+      loadForm(last);
+    } else if (last && last.wifi_state === "failed") {
+      say("saveMsg", "err", (FAILURES[last.failure] || "The flight tracker could not join the network.") + " Fix the details above and save again.");
+    } else {
+      say("saveMsg", "err", "Still trying to connect. Check the name and password, then save again.");
+    }
+  } catch (e) {
+    say("saveMsg", "err", "Could not save: " + e.message);
+  } finally {
+    $("saveBtn").disabled = false;
+  }
+}
+
+function init() {
+  renderCallsigns();
+  if (!("serial" in navigator)) { $("unsupported").hidden = false; $("app").hidden = true; return; }
+  $("connectBtn").addEventListener("click", connect);
+  $("disconnectBtn").addEventListener("click", disconnect);
+  $("allPorts").addEventListener("click", (e) => { e.preventDefault(); showAll = true; connect(); });
+  $("scanBtn").addEventListener("click", scan);
+  $("found").addEventListener("change", () => {
+    const v = $("found").value;
+    if (!v) return;
+    $("ssid").value = v;
+    const net = [...$("found").options].find((o) => o.value === v);
+    if (net && net.text.includes("(open)")) { $("openNet").checked = true; syncOpen(); }
+    $("pass").focus();
+  });
+  $("useLocation").addEventListener("click", useMyLocation);
+  $("modeNearby").addEventListener("change", syncMode);
+  $("modeSpecific").addEventListener("change", syncMode);
+  $("radiusAuto").addEventListener("change", syncRadiusAuto);
+  $("addCallsignBtn").addEventListener("click", addCallsign);
+  $("openNet").addEventListener("change", syncOpen);
+  $("showPass").addEventListener("click", () => {
+    const p = $("pass"); const show = p.type === "password";
+    p.type = show ? "text" : "password";
+    $("showPass").textContent = show ? "Hide" : "Show";
+    $("showPass").setAttribute("aria-pressed", String(show));
+  });
+  $("form").addEventListener("submit", save);
+}
+init();
+</script>
+</body>
+</html>

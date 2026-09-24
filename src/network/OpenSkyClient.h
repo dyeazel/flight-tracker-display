@@ -17,7 +17,7 @@ namespace OpenSkyClient {
 // after a 401).
 bool getToken(char *tokenOut, size_t tokenOutSize, bool force = false);
 
-// Fetches nearby aircraft within radiusMi of HOME_LAT/HOME_LON, filters by
+// Fetches nearby aircraft within radiusMi of ConfigStore::lat()/lon(), filters by
 // haversine distance, sorts by distance ascending, and fills outFlights
 // (up to maxOut entries - excess candidates beyond maxOut are simply not
 // stored, matching the fixed-size/no-dynamic-allocation design). Returns

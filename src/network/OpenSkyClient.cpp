@@ -8,6 +8,7 @@
 
 #include "OpenSkyParse.h"
 #include "config.h"
+#include "config/ConfigStore.h"
 #include "diag/NetStats.h"
 #include "flight/FlightMath.h"
 #include "secrets.h"
@@ -163,7 +164,10 @@ static int fetchOnce(const char *path, const char *token, float radiusMi, Flight
                           raw.length());
             snprintf(lastError, sizeof(lastError), "states: bad JSON (%s)", err.c_str());
         } else {
-            OpenSkyParse::parseStates(doc.as<JsonVariant>(), radiusMi, outFlights, maxOut, outCount);
+            CallsignList::Buf targets[CallsignList::kMax];
+            const int targetCount = ConfigStore::callsigns(targets);
+            OpenSkyParse::parseStates(doc.as<JsonVariant>(), radiusMi, ConfigStore::lat(), ConfigStore::lon(),
+                                       outFlights, maxOut, outCount, targets, targetCount);
             parsedOk = true;
         }
     } else {
@@ -180,7 +184,7 @@ static int fetchOnce(const char *path, const char *token, float radiusMi, Flight
 
 int fetchNearby(float radiusMi, Flight *outFlights, int maxOut) {
     float lamin, lamax, lomin, lomax;
-    FlightMath::boundingBox(HOME_LAT, HOME_LON, radiusMi, &lamin, &lamax, &lomin, &lomax);
+    FlightMath::boundingBox(ConfigStore::lat(), ConfigStore::lon(), radiusMi, &lamin, &lamax, &lomin, &lomax);
     char path[192];
     snprintf(path, sizeof(path), "%s?lamin=%f&lamax=%f&lomin=%f&lomax=%f", OPENSKY_PATH, lamin,
              lamax, lomin, lomax);

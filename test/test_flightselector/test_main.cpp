@@ -1,27 +1,40 @@
 #include <string.h>
 #include <unity.h>
 
+#include "config/CallsignList.h"
 #include "flight/FlightSelector.h"
 
 void setUp() {}
 void tearDown() {}
 
-// This deployment's TARGET_CALLSIGNS_COUNT is 0 (config.cpp) - track-specific-callsigns mode isn't
-// exercised by this build, only the "always zero missing" degenerate case findMissing's loop bound
-// produces at count 0.
+// Phase 7: tracked callsigns are runtime-configurable (ConfigStore) but threaded through as a parameter
+// here so findMissing() stays pure/native-testable. Zero configured callsigns (this deployment's default)
+// hits the "always zero missing" degenerate case at count 0.
 void test_find_missing_with_no_target_callsigns_configured() {
     char missing[4][12];
     Flight flights[2];
     strncpy(flights[0].callsign, "UAL1217", sizeof(flights[0].callsign) - 1);
     strncpy(flights[1].callsign, "DAL456", sizeof(flights[1].callsign) - 1);
-    int found = FlightSelector::findMissing(flights, 2, missing, 4);
+    int found = FlightSelector::findMissing(flights, 2, missing, 4, nullptr, 0);
     TEST_ASSERT_EQUAL(0, found);
 }
 
-void test_find_missing_with_zero_flights() {
+void test_find_missing_with_zero_flights_reports_all_targets_missing() {
     char missing[4][12];
-    int found = FlightSelector::findMissing(nullptr, 0, missing, 4);
-    TEST_ASSERT_EQUAL(0, found);
+    CallsignList::Buf targets[1] = {"UAL1217"};
+    int found = FlightSelector::findMissing(nullptr, 0, missing, 4, targets, 1);
+    TEST_ASSERT_EQUAL(1, found);  // no flights present at all (null/0) - every tracked callsign is missing
+}
+
+// Exercises the "track specific flights" branch: one tracked callsign present, one not.
+void test_find_missing_reports_only_absent_tracked_callsigns() {
+    char missing[4][12];
+    Flight flights[1];
+    strncpy(flights[0].callsign, "UAL1217", sizeof(flights[0].callsign) - 1);
+    CallsignList::Buf targets[2] = {"UAL1217", "DAL456"};
+    int found = FlightSelector::findMissing(flights, 1, missing, 4, targets, 2);
+    TEST_ASSERT_EQUAL(1, found);
+    TEST_ASSERT_EQUAL_STRING("DAL456", missing[0]);
 }
 
 static Flight commercial(const char *callsign) {
@@ -64,7 +77,8 @@ void test_sort_commercial_first_empty_is_safe() { FlightSelector::sortCommercial
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_find_missing_with_no_target_callsigns_configured);
-    RUN_TEST(test_find_missing_with_zero_flights);
+    RUN_TEST(test_find_missing_with_zero_flights_reports_all_targets_missing);
+    RUN_TEST(test_find_missing_reports_only_absent_tracked_callsigns);
     RUN_TEST(test_sort_commercial_first_moves_commercial_flights_to_front);
     RUN_TEST(test_sort_commercial_first_all_same_kind_is_a_noop_order);
     RUN_TEST(test_sort_commercial_first_empty_is_safe);

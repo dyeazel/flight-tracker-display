@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "config.h"
+#include "config/ConfigStore.h"
 #include "diag/Diag.h"
 #include "diag/SerialCommands.h"
 #include "display/DisplayManager.h"
@@ -13,7 +14,6 @@
 #include "network/OpenSkyClient.h"
 #include "network/WifiManager.h"
 #include "render/Renderer.h"
-#include "secrets.h"
 #include "time/TimeSync.h"
 #include "watchdog/Health.h"
 #include "watchdog/WatchdogManager.h"
@@ -33,26 +33,29 @@ static void logSoakLine() {
         Diag::lifetimeFail(), Diag::lifetimeWifiReconnects());
 }
 
-// Health::Hooks::isBusy: a scheduled reboot is deferred while flights are on screen. No isWifiConfigured
-// hook - flight-tracker's WiFi credentials are compile-time (secrets.h), always "configured".
+// Health::Hooks::isBusy: a scheduled reboot is deferred while flights are on screen.
+// Health::Hooks::isWifiConfigured: ConfigStore::hasWifi() (Phase 7) - so "wifi down" isn't reported while
+// a freshly-flashed/forgotten board is legitimately sitting unconfigured, awaiting the setup page.
 static bool flightsVisible() { return NetTask::lastPublishedCount() > 0; }
 
-// WifiManager::Credentials: compile-time secrets.h values, unlike ../../cyd-common's other consumer
-// (mlb-board), which sources these from its NVS-backed ConfigStore. reconfigure() is never called here.
-static bool wifiHasCreds() { return true; }
-static const char *wifiSsid() { return WIFI_SSID; }
-static bool wifiHasPass() { return WIFI_PASSWORD[0] != '\0'; }
-static const char *wifiPass() { return WIFI_PASSWORD; }
+// WifiManager::Credentials: NVS-backed via ConfigStore (Phase 7), same shape as ../../mlb-board's own
+// consumer of this hook. reconfigure() is called after a serial "set"/"forget" (see SerialCommands.cpp).
+static bool wifiHasCreds() { return ConfigStore::hasWifi(); }
+static const char *wifiSsid() { return ConfigStore::ssid(); }
+static bool wifiHasPass() { return ConfigStore::hasPass(); }
+static const char *wifiPass() { return ConfigStore::pass(); }
 
 // Shown only until the very first successful publish ever - after that, main() always has real flights to
 // draw (see loop()) and never falls back to this again, even through a long outage (the stale heartbeat
 // marker takes over instead). Gated on a "which state did we last draw" static so it doesn't repaint every
 // tick while nothing has changed.
 static void showPreDataStatus() {
-    static int lastState = -1;
+    static int lastState = -2;
     static char lastFailure[24] = "";
     int state;
-    if (!WifiManager::isConnected()) {
+    if (WifiManager::state() == WifiManager::State::Unconfigured) {
+        state = -1;  // no WiFi credentials saved yet - see ConfigStore
+    } else if (!WifiManager::isConnected()) {
         state = 0;
     } else if (!TimeSync::isSynced()) {
         state = 1;
@@ -74,6 +77,11 @@ static void showPreDataStatus() {
     lastState = state;
     display.clear(display.black);
     switch (state) {
+        case -1:
+            display.drawText8x8(4, 4, "Setup needed", display.white, display.black);
+            display.drawText8x8(4, 14, "Open web/config.html and", display.white, display.black);
+            display.drawText8x8(4, 24, "connect this board by USB", display.white, display.black);
+            break;
         case 0:
             display.drawText8x8(4, 4, "Connecting to WiFi...", display.white, display.black);
             if (lastFailure[0]) {
@@ -102,6 +110,7 @@ void setup() {
     Diag::begin();
     Serial.printf("=== flight-tracker-arduino booting (boot #%u, reason=%s) ===\n", Diag::bootCount(),
                   Diag::bootReason());
+    ConfigStore::begin();
 
     display.begin();
     TimeSync::begin();
@@ -126,7 +135,7 @@ void setup() {
         TimeSync::update(true);
     }
 #else
-    Health::begin({nullptr, flightsVisible});
+    Health::begin({ConfigStore::hasWifi, flightsVisible});
     NetTask::begin();  // owns WiFi connect/reconnect and all fetching from here on
     Serial.println("[net] task started");
 #endif
@@ -217,7 +226,7 @@ void loop() {
         // settles rather than extrapolating positions into nonsense.
         float elapsedS = (now - uiFixMs) / 1000.0f;
         if (elapsedS > DEAD_RECKON_MAX_S) elapsedS = (float)DEAD_RECKON_MAX_S;
-        FlightMath::applyDeadReckoning(uiFlights, uiCount, elapsedS);
+        FlightMath::applyDeadReckoning(uiFlights, uiCount, elapsedS, ConfigStore::lat(), ConfigStore::lon());
         Renderer::renderValues(display, uiFlights, uiCount);
         if (now - lastSoakLogMs >= 60000UL) {
             logSoakLine();

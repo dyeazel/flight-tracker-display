@@ -41,11 +41,19 @@ pio run -t upload --upload-port /dev/cu.usbserial-XX   # flash
 pio device monitor --port /dev/cu.usbserial-XX --baud 115200
 ```
 
-`include/secrets.h` (gitignored) must exist with `WIFI_SSID`,
-`WIFI_PASSWORD`, `OPENSKY_CLIENT_ID`, `OPENSKY_CLIENT_SECRET` - copy
+`include/secrets.h` (gitignored) must exist with `OPENSKY_CLIENT_ID`,
+`OPENSKY_CLIENT_SECRET`, `AERODATABOX_API_KEY` - copy
 `include/secrets.h.example` and fill in real values (see the MicroPython
-project's `secrets.py` for the current values, or OpenSky's account page
-for the client credentials).
+project's `secrets.py` for the current values, or OpenSky's/RapidAPI's
+account pages for the client credentials).
+
+WiFi credentials, home location, search radius, and tracked callsigns are
+runtime-configurable (`src/config/ConfigStore.h`, NVS-backed) rather than
+compile-time: open `web/config.html` in Chrome or Edge, connect the board
+over the same USB cable used to flash it (Web Serial), and use the setup
+form. `secrets.h`'s optional `WIFI_SSID`/`WIFI_PASSWORD` (dev convenience
+only) seed NVS once on first boot if present; an end-user build with no
+`secrets.h` boots straight to the "Setup needed" screen.
 
 ## Key findings from bring-up (real hardware, this session)
 

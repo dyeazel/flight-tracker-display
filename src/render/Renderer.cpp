@@ -5,6 +5,7 @@
 #include <time.h>
 
 #include "config.h"
+#include "config/ConfigStore.h"
 #include "flight/FlightMath.h"
 #include "time/TimeSync.h"
 
@@ -57,7 +58,7 @@ void drawValueLine(DisplayManager &display, const Flight &f, int x, int y, uint1
     snprintf(distField, sizeof(distField), "%9s", distRaw);
     display.drawText8x8(x, y, distField, color, display.black);
 
-    float brg = FlightMath::bearingDeg(HOME_LAT, HOME_LON, f.lat, f.lon);
+    float brg = FlightMath::bearingDeg(ConfigStore::lat(), ConfigStore::lon(), f.lat, f.lon);
     char brgField[8];
     snprintf(brgField, sizeof(brgField), "%3s", FlightMath::cardinalDirection(brg));
     int brgX = x + (int)strlen(distField) * 8 + TREND_ICON_GAP;

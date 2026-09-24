@@ -10,9 +10,10 @@
 extern bool DEBUG;
 
 // ---- Serial protocol (../../cyd-common's shared SerialCore) ----
-// Longest incoming command line this app ever needs (all commands here are short - no ssid/password
-// setup command the way mlb-board's SetupSerial has, which needs a much bigger line for that one).
-#define SERIAL_LINE_MAX 160
+// Longest incoming command line this app ever needs. Sized for the worst-case "set" command (Phase 7):
+// ssid (32) + pass (63) + lat/lon/radius_mi + up to CallsignList::kMax callsigns, plus JSON overhead -
+// mirrors mlb-board's own 384-byte SetupSerial line, sized generously for the same reason.
+#define SERIAL_LINE_MAX 512
 
 // ---- Watchdog / self-reboot ----
 // No ESP-IDF task watchdog / WDT_TIMEOUT_MS here - see WatchdogManager.h
@@ -94,16 +95,14 @@ extern bool DEBUG;
 // socket client exists here at all.
 
 // ---- Location / behavior ----
+// Runtime-configurable since Phase 7 (see src/config/ConfigStore.h) via the web setup page - these are
+// only the seed defaults used the first time NVS has no "cfg" values yet (or after a factory reset).
+// FlightMath/FlightSelector/OpenSkyParse take the live values as parameters rather than reading these
+// macros directly, so they stay pure/native-testable and so a runtime change actually takes effect.
 #define HOME_LAT 43.184601
 #define HOME_LON -88.990422
 
-// Leave empty to show whatever's nearby; see TARGET_CALLSIGNS usage in
-// FlightSelector for tracking specific callsigns instead.
-#define TARGET_CALLSIGNS_COUNT 0
-extern const char *const TARGET_CALLSIGNS[];
-
-#define RADIUS_MI_AUTO -1.0f  // sentinel: "not overridden", see effectiveRadius()
-#define RADIUS_MI RADIUS_MI_AUTO
+#define RADIUS_MI_AUTO -1.0f  // sentinel: "not overridden", see FlightMath::effectiveRadius()
 #define DEFAULT_RADIUS_MI 50.0f
 #define CALLSIGN_SEARCH_RADIUS_MI 10000.0f
 

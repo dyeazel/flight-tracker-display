@@ -69,10 +69,10 @@ void boundingBox(float lat, float lon, float radiusMi, float *outLamin,
     *outLomax = minf(lon + lonDelta, 180.0f);
 }
 
-float effectiveRadius() {
-    if (RADIUS_MI != RADIUS_MI_AUTO) return RADIUS_MI;
-    return (TARGET_CALLSIGNS_COUNT > 0) ? CALLSIGN_SEARCH_RADIUS_MI
-                                         : DEFAULT_RADIUS_MI;
+float effectiveRadius(float radiusOverrideMi, int targetCallsignCount) {
+    if (radiusOverrideMi != RADIUS_MI_AUTO) return radiusOverrideMi;
+    return (targetCallsignCount > 0) ? CALLSIGN_SEARCH_RADIUS_MI
+                                      : DEFAULT_RADIUS_MI;
 }
 
 bool isScheduledCallsign(const char *callsign) {
@@ -118,7 +118,7 @@ const char *cardinalDirection(float brg) {
     return kCardinalPoints[idx];
 }
 
-void applyDeadReckoning(Flight *flights, int count, float elapsedS) {
+void applyDeadReckoning(Flight *flights, int count, float elapsedS, float homeLat, float homeLon) {
     for (int i = 0; i < count; i++) {
         Flight &f = flights[i];
         if (f.onGround || f.speedKt < MIN_DEAD_RECKON_KT || !f.hasHeading) {
@@ -128,7 +128,7 @@ void applyDeadReckoning(Flight *flights, int count, float elapsedS) {
         deadReckon(f.fixLat, f.fixLon, f.heading, f.speedKt, elapsedS, &newLat, &newLon);
         f.lat = newLat;
         f.lon = newLon;
-        f.distanceMi = roundf(haversineMiles(HOME_LAT, HOME_LON, newLat, newLon) * 10) / 10;
+        f.distanceMi = roundf(haversineMiles(homeLat, homeLon, newLat, newLon) * 10) / 10;
         float rawAlt = f.fixAltitudeFt + f.vrateFpm * (elapsedS / 60.0f);
         int alt = (int)(roundf(rawAlt / 10.0f) * 10);
         f.altitudeFt = alt > 0 ? alt : 0;

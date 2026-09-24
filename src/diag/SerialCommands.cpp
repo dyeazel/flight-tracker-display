@@ -6,6 +6,8 @@
 #include <string.h>
 
 #include "config.h"
+#include "config/CallsignList.h"
+#include "config/ConfigStore.h"
 #include "diag/Diag.h"
 #include "diag/NetStats.h"
 #include "flight/FlightMath.h"
@@ -34,6 +36,84 @@ namespace SerialCommands {
 
 namespace {
 
+// Blocking scan (a few seconds; the UI redraw pauses briefly, which is fine while someone is running the
+// setup page) - mirrors ../../mlb-board's SetupSerial::cmdScan (its own comment: the async scan API proved
+// unreliable on this core).
+constexpr int kMaxNetworks = 12;
+void cmdScan() {
+    WifiManager::pause();  // a scan fails while a connection attempt is in flight
+    WiFi.scanDelete();
+    const int n = WiFi.scanNetworks(false /*async*/, false /*hidden*/, false /*passive*/, 150 /*ms per channel*/);
+    WifiManager::resume();
+    if (n < 0) {
+        WiFi.scanDelete();
+        return replyError("scan", "scan_failed");
+    }
+    JsonDocument d;
+    d["ok"] = true;
+    d["cmd"] = "scan";
+    JsonArray arr = d["networks"].to<JsonArray>();
+    bool used[64] = {false};
+    const int cap = n < 64 ? n : 64;
+    for (int count = 0; count < kMaxNetworks; count++) {
+        int best = -1;
+        for (int i = 0; i < cap; i++)
+            if (!used[i] && WiFi.SSID(i).length() > 0 && (best < 0 || WiFi.RSSI(i) > WiFi.RSSI(best))) best = i;
+        if (best < 0) break;
+        used[best] = true;
+        const String ssid = WiFi.SSID(best);
+        bool dup = false;
+        for (JsonObject o : arr)
+            if (ssid == o["ssid"].as<const char *>()) dup = true;
+        if (dup) {
+            count--;
+            continue;
+        }
+        JsonObject o = arr.add<JsonObject>();
+        o["ssid"] = ssid;
+        o["rssi"] = WiFi.RSSI(best);
+        o["secure"] = WiFi.encryptionType(best) != WIFI_AUTH_OPEN;
+    }
+    WiFi.scanDelete();
+    reply(d);
+}
+
+// Reads "callsigns" ([str,...], 0-CallsignList::kMax entries) into out. Returns nullptr on success, else
+// the error to report.
+const char *parseCallsigns(JsonDocument &in, CallsignList::Buf *out, int *count) {
+    *count = 0;
+    if (!in["callsigns"].is<JsonArray>()) return nullptr;  // omitted = no tracked callsigns
+    JsonArray arr = in["callsigns"].as<JsonArray>();
+    if (arr.size() > (size_t)CallsignList::kMax) return "too_many_callsigns";
+    for (JsonVariant v : arr) {
+        if (!v.is<const char *>()) return "bad_json";
+        const char *s = v.as<const char *>();
+        // Reject outright rather than silently truncating - a truncated callsign would validate fine
+        // (still uppercase alnum, still <= kCallsignChars) and get saved as something the caller never
+        // asked for.
+        if (strlen(s) > (size_t)CallsignList::kCallsignChars) return "bad_callsign";
+        strcpy(out[*count], s);
+        (*count)++;
+    }
+    return nullptr;
+}
+
+void cmdSet(JsonDocument &in) {
+    if (!in["ssid"].is<const char *>() || in["lat"].isNull() || in["lon"].isNull()) {
+        return replyError("set", "bad_json");
+    }
+    CallsignList::Buf targets[CallsignList::kMax];
+    int targetCount;
+    if (const char *e = parseCallsigns(in, targets, &targetCount)) return replyError("set", e);
+    const char *pass = in["pass"].is<const char *>() ? in["pass"].as<const char *>() : nullptr;
+    const float radiusMi = in["radius_mi"].isNull() ? RADIUS_MI_AUTO : in["radius_mi"].as<float>();
+    const char *err = ConfigStore::save(in["ssid"].as<const char *>(), pass, in["lat"].as<float>(),
+                                         in["lon"].as<float>(), radiusMi, targets, targetCount);
+    if (err) return replyError("set", err);
+    WifiManager::reconfigure();  // reconnect with the new credentials, no reboot needed
+    return replyOk("set");
+}
+
 void handleCommand(JsonDocument &in, const char *cmd) {
     if (!strcmp(cmd, "hello")) {
         JsonDocument d;
@@ -41,7 +121,8 @@ void handleCommand(JsonDocument &in, const char *cmd) {
         d["cmd"] = "hello";
         d["fw"] = "flight-tracker-arduino " __DATE__;
         d["board"] = "cyd";
-        d["proto"] = 1;
+        d["proto"] = 2;  // 2 = runtime WiFi/location/callsign config (Phase 7); 1 = compile-time only
+        d["maxCallsigns"] = CallsignList::kMax;
         return reply(d);
     }
     if (!strcmp(cmd, "get")) {
@@ -49,12 +130,27 @@ void handleCommand(JsonDocument &in, const char *cmd) {
         d["ok"] = true;
         d["cmd"] = "get";
         d["debug"] = DEBUG;
-        d["radius_mi"] = FlightMath::effectiveRadius();
+        d["radius_mi"] = FlightMath::effectiveRadius(ConfigStore::radiusOverrideMi(), ConfigStore::callsignCount());
         d["refresh_s"] = REFRESH_SECONDS;
         d["wifi"] = WifiManager::isConnected();  // not a raw WiFi.status() check - see Diag::fillDiag's comment
+        d["wifi_state"] = WifiManager::stateName();
+        d["failure"] = WifiManager::lastFailure();
         d["ip"] = WiFi.localIP().toString();
         d["time_synced"] = TimeSync::isSynced();
+        d["ssid"] = ConfigStore::ssid();
+        d["hasPass"] = ConfigStore::hasPass();
+        d["lat"] = ConfigStore::lat();
+        d["lon"] = ConfigStore::lon();
+        JsonArray cs = d["callsigns"].to<JsonArray>();
+        for (int i = 0; i < ConfigStore::callsignCount(); i++) cs.add(ConfigStore::callsign(i));
         return reply(d);
+    }
+    if (!strcmp(cmd, "set")) return cmdSet(in);
+    if (!strcmp(cmd, "scan")) return cmdScan();
+    if (!strcmp(cmd, "forget")) {
+        ConfigStore::forgetWifi();
+        WifiManager::reconfigure();
+        return replyOk("forget");
     }
     if (!strcmp(cmd, "diag")) {
         JsonDocument d;
