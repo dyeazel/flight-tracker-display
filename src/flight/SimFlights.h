@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Flight.h"
+#include "FlightSelector.h"
 
 #ifdef SIM_DATA
 
@@ -30,9 +31,11 @@ struct Scene {
     bool refreshing = false;    // overlay the yellow "refreshing" heartbeat
 };
 
-// Fills `flights` (up to maxFlights) and `missing` for `scene`; times are relative to `nowUtc` (0 = unsynced,
-// in which case the timeline row is simply omitted).
-Scene fill(int scene, Flight *flights, int maxFlights, char missing[][12], long nowUtc);
+// Fills `flights` (up to maxFlights), `missing`, and a parallel missingStatus/missingWhenUtc per missing
+// entry (Phase 8) for `scene`; times are relative to `nowUtc` (0 = unsynced, in which case the timeline row
+// is simply omitted).
+Scene fill(int scene, Flight *flights, int maxFlights, char missing[][12], FlightSelector::MissingStatus *missingStatus,
+           time_t *missingWhenUtc, long nowUtc);
 
 }  // namespace SimFlights
 

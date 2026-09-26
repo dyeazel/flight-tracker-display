@@ -61,7 +61,8 @@
         border-radius: 8px; padding: .6rem; font-size: .8rem; white-space: pre-wrap; word-break: break-all; }
   fieldset { border: 0; padding: 0; margin: .9rem 0 0; min-width: 0; }
   legend { font-weight: 600; padding: 0; margin-bottom: .3rem; }
-  .crow { display: grid; grid-template-columns: 1fr auto auto; gap: .4rem; align-items: center; margin-top: .5rem; }
+  .crow { display: grid; grid-template-columns: 1fr 3.2rem 3.2rem auto auto; gap: .35rem; align-items: center; margin-top: .5rem; }
+  .crow input.code { min-width: 0; padding: .6rem .3rem; text-align: center; }
   .crow .state { font-size: 1rem; width: 1.4rem; text-align: center; }
   #addCallsign { margin-top: .7rem; }
   [hidden] { display: none !important; }
@@ -141,6 +142,7 @@
           <input type="radio" name="mode" id="modeSpecific" value="specific">
           <div>Track specific flights<div class="hint">Only show these callsigns, wherever they are - the search radius above is ignored.</div></div>
         </label>
+        <p class="hint">Origin/destination are optional - set them to lock in a flight's route if the tracker ever shows a stale or wrong one for it.</p>
         <div id="callsignRows"></div>
         <div class="actions" id="addCallsign"><button type="button" id="addCallsignBtn">+ Add a flight</button></div>
         <p class="hint" id="callsignsNote" hidden></p>
@@ -308,6 +310,12 @@ async function checkCallsign(row) {
   renderCallsigns();
 }
 
+// Pin inputs only check shape (2-4 uppercase letters/digits) client-side - there's no public CORS-open API
+// to check an airport code against the way checkCallsign() does, and duplicating the firmware's
+// AirportTable into this page would be a second copy of a generated table to keep in sync. Real validation
+// is the device's "set" response (bad_origin/bad_destination), same as lat/lon/radius already work.
+const codeLooksValid = (v) => v === "" || /^[A-Z0-9]{2,4}$/.test(v);
+
 function renderCallsigns() {
   const rows = $("callsignRows");
   rows.replaceChildren();
@@ -321,6 +329,19 @@ function renderCallsigns() {
       $(`state${i}`).textContent = "";
     });
     input.addEventListener("blur", () => { if (row.value && row.state === "unchecked") checkCallsign(row); });
+    const codeInput = (field, label) => {
+      const inp = el("input", { type: "text", className: "code", maxlength: 4, autocapitalize: "characters",
+                                 spellcheck: false, placeholder: label, ariaLabel: `Flight ${i + 1} ${label.toLowerCase()}`,
+                                 value: row[field] });
+      inp.addEventListener("input", () => {
+        row[field] = inp.value.toUpperCase();
+        inp.value = row[field];
+        inp.title = codeLooksValid(row[field]) ? "" : "2 to 4 letters/numbers, or leave blank";
+      });
+      return inp;
+    };
+    const origin = codeInput("origin", "From");
+    const dest = codeInput("destination", "To");
     const state = el("span", { className: "state", id: `state${i}`, textContent: STATE_ICON[row.state] || "",
                                 title: (STATE_TITLE[row.state] || "") + (row.state === "bad" || row.state === "unverified" ? " - click to check again" : "") });
     if (row.value && (row.state === "bad" || row.state === "unverified")) {
@@ -329,7 +350,7 @@ function renderCallsigns() {
     }
     const rm = el("button", { type: "button", textContent: "✕", ariaLabel: `Remove flight ${i + 1}` });
     rm.addEventListener("click", () => { callsigns.splice(i, 1); renderCallsigns(); });
-    rows.append(el("div", { className: "crow" }, input, state, rm));
+    rows.append(el("div", { className: "crow" }, input, origin, dest, state, rm));
   });
   $("addCallsignBtn").disabled = callsigns.length >= maxCallsigns();
   const note = $("callsignsNote");
@@ -339,10 +360,12 @@ function renderCallsigns() {
 
 function addCallsign() {
   if (callsigns.length >= maxCallsigns()) return;
-  callsigns.push({ value: "", state: "unchecked" });
+  callsigns.push({ value: "", origin: "", destination: "", state: "unchecked" });
   renderCallsigns();
+  // Each row now has 3 inputs (callsign, origin, destination) - focus the new row's callsign field, i.e.
+  // the first of the last row's three inputs.
   const inputs = $("callsignRows").querySelectorAll("input");
-  inputs[inputs.length - 1]?.focus();
+  inputs[inputs.length - 3]?.focus();
 }
 
 function syncMode() {
@@ -378,7 +401,7 @@ function loadForm(get) {
   $("ssid").value = get.ssid || "";
   $("lat").value = get.lat;
   $("lon").value = get.lon;
-  callsigns = (get.callsigns || []).map((v) => ({ value: v, state: "ok" }));
+  callsigns = (get.callsigns || []).map((v) => ({ value: v[0], origin: v[1] || "", destination: v[2] || "", state: "ok" }));
   const specific = callsigns.length > 0;
   $("modeNearby").checked = !specific;
   $("modeSpecific").checked = specific;
@@ -504,10 +527,12 @@ async function save(ev) {
   const specific = $("modeSpecific").checked;
   const cmd = { cmd: "set", ssid, lat, lon };
   if (specific) {
-    const values = callsigns.map((c) => c.value.trim()).filter(Boolean);
-    if (!values.length) return say("saveMsg", "err", "Add at least one flight to track, or switch to “Nearby flights”.");
-    if (callsigns.some((c) => c.state === "bad")) return say("saveMsg", "err", "One of the flights isn't recognized by adsbdb - fix or remove it.");
-    cmd.callsigns = values;
+    const tracked = callsigns.filter((c) => c.value.trim());
+    if (!tracked.length) return say("saveMsg", "err", "Add at least one flight to track, or switch to “Nearby flights”.");
+    if (tracked.some((c) => c.state === "bad")) return say("saveMsg", "err", "One of the flights isn't recognized by adsbdb - fix or remove it.");
+    if (tracked.some((c) => !codeLooksValid(c.origin) || !codeLooksValid(c.destination)))
+      return say("saveMsg", "err", "An origin or destination code isn't valid - 2 to 4 letters/numbers, or leave it blank.");
+    cmd.callsigns = tracked.map((c) => [c.value.trim(), c.origin.trim(), c.destination.trim()]);
   } else {
     cmd.callsigns = [];
     if (!$("radiusAuto").checked) {
@@ -530,6 +555,8 @@ async function save(ev) {
         bad_ssid: "The network name is not valid.", bad_pass: "The password must be 8 to 63 characters.",
         bad_lat: "Latitude is not valid.", bad_lon: "Longitude is not valid.", bad_radius: "Search radius is not valid.",
         bad_callsign: "One of the flights is not a valid callsign.",
+        bad_origin: "One of the origin airport codes isn't recognized.",
+        bad_destination: "One of the destination airport codes isn't recognized.",
         too_many_callsigns: "Too many flights: the flight tracker follows at most " + maxCallsigns() + ".",
         duplicate_callsign: "Each flight can only be added once.",
       }[r.error] || r.error);

@@ -3,6 +3,7 @@
 #include <stdint.h>
 
 #include "flight/Flight.h"
+#include "flight/FlightSelector.h"
 
 // All networking (WiFi connect/reconnect, the OpenSky fetch, FlightSelector::enrich()'s adsbdb/AeroDataBox/
 // track lookups) runs here, in its own FreeRTOS task, so a slow or stuck call can never freeze the display
@@ -38,11 +39,13 @@ bool isPolling();
 int lastPublishedCount();
 
 // Copies the latest published snapshot: up to maxOut Flights into outFlights (*outCount set to however
-// many), up to maxMissing callsigns into outMissing (*outMissingCount set likewise), *outAnyFlagged, and
-// *outFixMs (millis() at the real fetch this snapshot reflects - compare against a previous call's value
-// to tell whether the data actually changed). Returns false, touching nothing, if nothing has ever been
-// published (still connecting/loading).
-bool getFlights(Flight *outFlights, int maxOut, int *outCount, char outMissing[][12], int maxMissing,
+// many), up to maxMissing callsigns into outMissing with a parallel FlightSelector::MissingStatus/time_t
+// per entry into outMissingStatus/outMissingWhenUtc (Phase 8 - see FlightSelector::classifyMissing()),
+// *outMissingCount set likewise, *outAnyFlagged, and *outFixMs (millis() at the real fetch this snapshot
+// reflects - compare against a previous call's value to tell whether the data actually changed). Returns
+// false, touching nothing, if nothing has ever been published (still connecting/loading).
+bool getFlights(Flight *outFlights, int maxOut, int *outCount, char outMissing[][12],
+                FlightSelector::MissingStatus *outMissingStatus, time_t *outMissingWhenUtc, int maxMissing,
                 int *outMissingCount, bool *outAnyFlagged, uint32_t *outFixMs);
 
 // Minimum free stack (bytes) seen so far on this task, for diagnostics (see NET_TASK_STACK_BYTES).

@@ -55,6 +55,14 @@ form. `secrets.h`'s optional `WIFI_SSID`/`WIFI_PASSWORD` (dev convenience
 only) seed NVS once on first boot if present; an end-user build with no
 `secrets.h` boots straight to the "Setup needed" screen.
 
+A tracked callsign can optionally be **pinned** to a specific origin/destination airport
+(`src/config/CallsignList.h`'s `Entry`, set from the same web form): once pinned, that flight always shows
+the pinned route - and the correct airport name immediately, from the on-device `AirportTable` - instead of
+whatever adsbdb/AeroDataBox returned, which can be wrong or stale for a specific flight. A tracked flight
+that isn't currently showing up reports why (`FlightSelector::classifyMissing()`, using the same
+`RouteCache` schedule lookup as route enrichment): not yet departed, already landed, or in flight but out
+of range, instead of a bare "not found" - useful for watching a friend's multi-leg itinerary leg by leg.
+
 ## Key findings from bring-up (real hardware, this session)
 
 ### Display: ILI9341_2_DRIVER + TFT_INVERSION_ON + rotation=1

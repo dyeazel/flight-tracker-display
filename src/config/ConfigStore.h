@@ -27,20 +27,28 @@ float lon();
 float radiusOverrideMi();
 
 int callsignCount();
-const char *callsign(int i);  // i in [0, callsignCount()); out of range returns ""
+const char *callsign(int i);     // i in [0, callsignCount()); out of range returns ""
+const char *origin(int i);       // "" if unpinned or i out of range
+const char *destination(int i);  // "" if unpinned or i out of range
 // Fills out[0..kMax) and returns callsignCount() - convenient for passing straight into
-// FlightSelector::findMissing/OpenSkyParse::parseStates.
+// FlightSelector::findMissing/OpenSkyParse::parseStates (neither cares about pins, only the callsign).
 int callsigns(CallsignList::Buf *out);
+
+// True if `callsign` is one of the tracked entries (regardless of whether it has a pin); fills
+// outOrigin/outDestination (each CallsignList::kCodeChars+1 bytes) with that entry's pin fields, "" for
+// whichever field isn't pinned - see FlightSelector::enrich()'s "Route pinning" comment (Phase 8).
+bool pinFor(const char *callsign, char *outOrigin, char *outDestination);
 
 constexpr int kSsidMax = 32;  // 802.11 limits
 constexpr int kPassMax = 63;
 
 // Validates and saves. `pass == nullptr` keeps the stored password (empty string means an open network).
-// `callsignCount` may be 0 (nearby mode). Returns nullptr on success, else a short error string
-// ("bad_ssid", "bad_pass", "bad_lat", "bad_lon", "bad_radius", "bad_callsign", "too_many_callsigns",
-// "duplicate_callsign", "save_failed").
+// `entryCount` may be 0 (nearby mode). Returns nullptr on success, else a short error string ("bad_ssid",
+// "bad_pass", "bad_lat", "bad_lon", "bad_radius", "bad_callsign", "bad_origin", "bad_destination",
+// "too_many_callsigns", "duplicate_callsign", "save_failed"). A non-empty origin/destination is checked
+// against AirportTable::findByCode() - CallsignList::validate() only checks their shape.
 const char *save(const char *ssid, const char *pass, float lat, float lon, float radiusMi,
-                  const CallsignList::Buf *callsigns, int callsignCount);
+                  const CallsignList::Entry *entries, int entryCount);
 
 // Erases WiFi credentials (keeps location/radius/callsigns). Used to re-enter provisioning.
 void forgetWifi();

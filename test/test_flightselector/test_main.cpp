@@ -74,6 +74,49 @@ void test_sort_commercial_first_all_same_kind_is_a_noop_order() {
 
 void test_sort_commercial_first_empty_is_safe() { FlightSelector::sortCommercialFirst(nullptr, 0); }
 
+// ---- classifyMissingStatus (Phase 8) ----
+// Pure decision table over a missing tracked flight's known schedule window vs "now" - the network call
+// that supplies depUtc/arrUtc (RouteCache::lookupActiveLeg) lives in FlightSelectorEnrich.cpp instead.
+
+void test_classify_missing_unknown_when_no_schedule_at_all() {
+    TEST_ASSERT_EQUAL(FlightSelector::MissingStatus::Unknown, FlightSelector::classifyMissingStatus(0, 0, 1000));
+}
+
+void test_classify_missing_not_yet_departed_before_dep() {
+    TEST_ASSERT_EQUAL(FlightSelector::MissingStatus::NotYetDeparted,
+                       FlightSelector::classifyMissingStatus(2000, 5000, 1000));
+}
+
+void test_classify_missing_landed_after_arr() {
+    TEST_ASSERT_EQUAL(FlightSelector::MissingStatus::Landed, FlightSelector::classifyMissingStatus(1000, 2000, 3000));
+}
+
+void test_classify_missing_in_progress_between_dep_and_arr() {
+    TEST_ASSERT_EQUAL(FlightSelector::MissingStatus::InProgressNotVisible,
+                       FlightSelector::classifyMissingStatus(1000, 2000, 1500));
+}
+
+void test_classify_missing_in_progress_when_only_arrival_known_and_not_yet_passed() {
+    // Departure unknown, arrival still ahead - can't say "not yet departed" (no dep bound to compare
+    // against) or "landed" (arrival hasn't passed), so it's in progress, not unknown.
+    TEST_ASSERT_EQUAL(FlightSelector::MissingStatus::InProgressNotVisible,
+                       FlightSelector::classifyMissingStatus(0, 2000, 1000));
+}
+
+void test_classify_missing_not_yet_departed_when_only_departure_known_and_future() {
+    TEST_ASSERT_EQUAL(FlightSelector::MissingStatus::NotYetDeparted,
+                       FlightSelector::classifyMissingStatus(2000, 0, 1000));
+}
+
+void test_missing_status_name_maps_every_value() {
+    TEST_ASSERT_EQUAL_STRING("unknown", FlightSelector::missingStatusName(FlightSelector::MissingStatus::Unknown));
+    TEST_ASSERT_EQUAL_STRING("not_yet_departed",
+                              FlightSelector::missingStatusName(FlightSelector::MissingStatus::NotYetDeparted));
+    TEST_ASSERT_EQUAL_STRING("in_progress",
+                              FlightSelector::missingStatusName(FlightSelector::MissingStatus::InProgressNotVisible));
+    TEST_ASSERT_EQUAL_STRING("landed", FlightSelector::missingStatusName(FlightSelector::MissingStatus::Landed));
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_find_missing_with_no_target_callsigns_configured);
@@ -82,5 +125,12 @@ int main() {
     RUN_TEST(test_sort_commercial_first_moves_commercial_flights_to_front);
     RUN_TEST(test_sort_commercial_first_all_same_kind_is_a_noop_order);
     RUN_TEST(test_sort_commercial_first_empty_is_safe);
+    RUN_TEST(test_classify_missing_unknown_when_no_schedule_at_all);
+    RUN_TEST(test_classify_missing_not_yet_departed_before_dep);
+    RUN_TEST(test_classify_missing_landed_after_arr);
+    RUN_TEST(test_classify_missing_in_progress_between_dep_and_arr);
+    RUN_TEST(test_classify_missing_in_progress_when_only_arrival_known_and_not_yet_passed);
+    RUN_TEST(test_classify_missing_not_yet_departed_when_only_departure_known_and_future);
+    RUN_TEST(test_missing_status_name_maps_every_value);
     return UNITY_END();
 }

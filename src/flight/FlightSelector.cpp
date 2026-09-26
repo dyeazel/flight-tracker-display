@@ -34,4 +34,22 @@ void sortCommercialFirst(Flight *flights, int count) {
                       [](const Flight &a, const Flight &b) { return a.isCommercial() && !b.isCommercial(); });
 }
 
+MissingStatus classifyMissingStatus(time_t depUtc, time_t arrUtc, time_t now) {
+    if (depUtc == 0 && arrUtc == 0) return MissingStatus::Unknown;
+    if (depUtc != 0 && now < depUtc) return MissingStatus::NotYetDeparted;
+    if (arrUtc != 0 && now > arrUtc) return MissingStatus::Landed;
+    // Either airborne-but-out-of-range (both bounds known, now between them) or one bound is known and
+    // hasn't ruled that out yet (e.g. only arrUtc is known and now <= arrUtc) - either way, not "not found".
+    return MissingStatus::InProgressNotVisible;
+}
+
+const char *missingStatusName(MissingStatus s) {
+    switch (s) {
+        case MissingStatus::NotYetDeparted: return "not_yet_departed";
+        case MissingStatus::InProgressNotVisible: return "in_progress";
+        case MissingStatus::Landed: return "landed";
+        default: return "unknown";
+    }
+}
+
 }  // namespace FlightSelector

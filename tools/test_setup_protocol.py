@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Exercises the device's serial setup protocol (src/diag/SerialCommands.cpp's set/scan/forget, Phase 7)
-on real hardware. Restores the original WiFi/location/radius/callsigns settings afterwards (WiFi creds are
-read from include/secrets.h). Mirrors ../../mlb-board's tools/test_setup_protocol.py.
+"""Exercises the device's serial setup protocol (src/diag/SerialCommands.cpp's set/scan/forget, Phase 7;
+origin/destination pins, Phase 8) on real hardware. Restores the original WiFi/location/radius/callsigns
+settings afterwards (WiFi creds are read from include/secrets.h). Mirrors ../../mlb-board's
+tools/test_setup_protocol.py.
 
   /Users/dean/.platformio/penv/bin/python tools/test_setup_protocol.py [/dev/cu.usbserial-XX]
 """
@@ -51,6 +52,9 @@ def main():
 
     dg = d.call({"cmd": "diag"})
     check("diag returns health data", dg.get("ok") and "boot_reason" in dg and "heap_max_alloc" in dg and "restarts" in dg, dg)
+    # "missing" is only present once NetTask has published at least once (see SerialCommands.cpp's diag
+    # handler) - right after boot (as here) that may not have happened yet, so absence is fine too.
+    check("diag's missing field, if present, is a list", "missing" not in dg or isinstance(dg["missing"], list), dg)
 
     r = d.call({"cmd": "scan"}, wait=20); check("scan lists networks", r.get("ok") and isinstance(r.get("networks"), list) and len(r["networks"]) > 0, r)
     if r.get("ok"):
@@ -64,22 +68,34 @@ def main():
     check("set rejects out-of-range lat", d.call({**base, "lat": 95.0}).get("error") == "bad_lat")
     check("set rejects out-of-range lon", d.call({**base, "lon": -200.0}).get("error") == "bad_lon")
     check("set rejects out-of-range radius", d.call({**base, "radius_mi": 0.1}).get("error") == "bad_radius")
+    # callsigns entries are [callsign, origin, destination] triples (Phase 8); origin/destination default to "".
+    cs = lambda callsign, origin="", dest="": [callsign, origin, dest]
     C = lambda cs: d.call({**base, "callsigns": cs}).get("error")
-    check("set rejects lowercase callsign", C(["ual1217"]) == "bad_callsign")
-    check("set rejects too-long callsign", C(["ABCDEFGHIJKL"]) == "bad_callsign")
-    check("set rejects duplicate callsigns", C(["UAL1217", "UAL1217"]) == "duplicate_callsign")
-    check("set rejects 9 callsigns", C([f"UAL{1000+i}" for i in range(9)]) == "too_many_callsigns")
-    check("set rejects non-string callsign entry", C([1217]) == "bad_json")
+    check("set rejects lowercase callsign", C([cs("ual1217")]) == "bad_callsign")
+    check("set rejects too-long callsign", C([cs("ABCDEFGHIJKL")]) == "bad_callsign")
+    check("set rejects duplicate callsigns", C([cs("UAL1217"), cs("UAL1217")]) == "duplicate_callsign")
+    check("set rejects 9 callsigns", C([cs(f"UAL{1000+i}") for i in range(9)]) == "too_many_callsigns")
+    check("set rejects non-string callsign entry", C([[1217, "", ""]]) == "bad_json")
+    check("set rejects lowercase origin", C([cs("UAL1217", "ord")]) == "bad_origin")
+    check("set rejects unrecognized origin code", C([cs("UAL1217", "ZZZZ")]) == "bad_origin")
+    check("set rejects lowercase destination", C([cs("UAL1217", "", "den")]) == "bad_destination")
+    check("set rejects unrecognized destination code", C([cs("UAL1217", "", "ZZZZ")]) == "bad_destination")
     check("bad json", d.call(None, raw="{nope").get("error") == "bad_json")
     check("unknown cmd", d.call({"cmd": "xyz"}).get("error") == "unknown_cmd")
     check("too long line", d.call(None, raw='{"cmd":"set","ssid":"' + "a" * 600 + '"}').get("error") == "too_long")
     g = d.call({"cmd": "get"})
     check("rejected sets changed nothing", g["ssid"] == ssid and g["lat"] == orig_lat and g["callsigns"] == orig_callsigns, g)
 
-    r = d.call({**base, "radius_mi": 75.0, "callsigns": ["UAL1217", "DAL456"]})
+    r = d.call({**base, "radius_mi": 75.0, "callsigns": [cs("UAL1217"), cs("DAL456")]})
     check("set radius + 2 callsigns", r.get("ok"), r)
     g = d.call({"cmd": "get"})
-    check("get returns saved radius/callsigns", g["radius_mi"] == 75.0 and g["callsigns"] == ["UAL1217", "DAL456"], g)
+    check("get returns saved radius/callsigns", g["radius_mi"] == 75.0
+          and g["callsigns"] == [cs("UAL1217"), cs("DAL456")], g)
+
+    r = d.call({**base, "callsigns": [cs("UAL1217", "ORD", "DEN")]})
+    check("set a real origin/destination pin", r.get("ok"), r)
+    g = d.call({"cmd": "get"})
+    check("get returns the saved pin", g["callsigns"] == [cs("UAL1217", "ORD", "DEN")], g)
 
     r = d.call({**base, "callsigns": []})  # omitting radius_mi -> back to auto
     check("set clears callsigns, radius back to auto", r.get("ok"), r)

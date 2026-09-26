@@ -140,6 +140,23 @@ void test_target_callsigns_filters_to_matches_within_radius() {
     TEST_ASSERT_EQUAL_STRING("AAL1985", out[0].callsign);
 }
 
+// Phase 8: matches must come out in the caller's configured order, not OpenSky's arbitrary state order -
+// so a friend's multi-leg itinerary displays leg by leg as entered, and stays stable poll to poll. In
+// kStatesNearOrd, SKW4740 appears BEFORE AAL1985 in the raw state array; targets ask for the opposite
+// order, which the (buggy, pre-Phase-8) arrival-order behavior would have gotten backwards.
+void test_target_callsigns_preserve_configured_order() {
+    JsonDocument doc;
+    TEST_ASSERT_FALSE(deserializeJson(doc, kStatesNearOrd));
+    Flight out[10];
+    int count = 0;
+    CallsignList::Buf targets[2] = {"AAL1985", "SKW4740"};
+    OpenSkyParse::parseStates(doc.as<JsonVariant>(), /*radiusMi=*/CALLSIGN_SEARCH_RADIUS_MI, kHomeLat,
+                               kHomeLon, out, 10, &count, targets, 2);
+    TEST_ASSERT_EQUAL(2, count);
+    TEST_ASSERT_EQUAL_STRING("AAL1985", out[0].callsign);
+    TEST_ASSERT_EQUAL_STRING("SKW4740", out[1].callsign);
+}
+
 void test_null_states_yields_zero_flights() {
     JsonDocument doc;
     TEST_ASSERT_FALSE(deserializeJson(doc, kNoStates));
@@ -190,6 +207,7 @@ int main() {
     RUN_TEST(test_callsign_trailing_space_trimmed);
     RUN_TEST(test_radius_filters_out_farther_flights);
     RUN_TEST(test_target_callsigns_filters_to_matches_within_radius);
+    RUN_TEST(test_target_callsigns_preserve_configured_order);
     RUN_TEST(test_max_out_caps_result_count_to_closest);
     RUN_TEST(test_unit_conversions_match_known_row);
     RUN_TEST(test_on_ground_row_has_no_altitude_but_can_still_have_ground_track);

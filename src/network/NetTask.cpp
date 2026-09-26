@@ -34,6 +34,8 @@ struct Lock {
 Flight gPublished[MAX_ROWS];
 int gPublishedCount = 0;
 char gPublishedMissing[MAX_ROWS][12];
+FlightSelector::MissingStatus gPublishedMissingStatus[MAX_ROWS];
+time_t gPublishedMissingWhenUtc[MAX_ROWS];
 int gPublishedMissingCount = 0;
 bool gPublishedAnyFlagged = false;
 uint32_t gPublishedFixMs = 0;
@@ -42,15 +44,22 @@ bool gEverPublished = false;
 // This task's own working copies - never touched by the UI task, so no lock needed.
 Flight gWorking[MAX_ROWS];
 char gWorkingMissing[MAX_ROWS][12];
+FlightSelector::MissingStatus gWorkingMissingStatus[MAX_ROWS];
+time_t gWorkingMissingWhenUtc[MAX_ROWS];
 uint32_t gNextPollMs = 0;
 
-void publish(Flight *flights, int count, char missing[][12], int missingCount, bool anyFlagged) {
+void publish(Flight *flights, int count, char missing[][12], const FlightSelector::MissingStatus *missingStatus,
+             const time_t *missingWhenUtc, int missingCount, bool anyFlagged) {
     Lock lock;
     const int n = count < MAX_ROWS ? count : MAX_ROWS;
     for (int i = 0; i < n; i++) gPublished[i] = flights[i];
     gPublishedCount = n;
     const int nm = missingCount < MAX_ROWS ? missingCount : MAX_ROWS;
-    for (int i = 0; i < nm; i++) memcpy(gPublishedMissing[i], missing[i], sizeof(gPublishedMissing[i]));
+    for (int i = 0; i < nm; i++) {
+        memcpy(gPublishedMissing[i], missing[i], sizeof(gPublishedMissing[i]));
+        gPublishedMissingStatus[i] = missingStatus[i];
+        gPublishedMissingWhenUtc[i] = missingWhenUtc[i];
+    }
     gPublishedMissingCount = nm;
     gPublishedAnyFlagged = anyFlagged;
     gPublishedFixMs = millis();
@@ -78,9 +87,12 @@ void pollIfDue() {
     const int targetCount = ConfigStore::callsigns(targets);
     const int missingCount =
         FlightSelector::findMissing(gWorking, count, gWorkingMissing, MAX_ROWS, targets, targetCount);
+    // Why each missing tracked flight hasn't shown up yet (Phase 8) - a RouteCache lookup per missing
+    // callsign, same budgeted/cached path enrich() below already uses for present flights.
+    FlightSelector::classifyMissing(gWorkingMissing, missingCount, gWorkingMissingStatus, gWorkingMissingWhenUtc);
     const bool anyFlagged = FlightSelector::enrich(gWorking, count);
     FlightSelector::sortCommercialFirst(gWorking, count);
-    publish(gWorking, count, gWorkingMissing, missingCount, anyFlagged);
+    publish(gWorking, count, gWorkingMissing, gWorkingMissingStatus, gWorkingMissingWhenUtc, missingCount, anyFlagged);
 
     gNextPollMs = millis() + OpenSkyClient::currentRefreshInterval() * 1000UL;
     gPolling = false;
@@ -127,7 +139,8 @@ int lastPublishedCount() {
     return gEverPublished ? gPublishedCount : 0;
 }
 
-bool getFlights(Flight *outFlights, int maxOut, int *outCount, char outMissing[][12], int maxMissing,
+bool getFlights(Flight *outFlights, int maxOut, int *outCount, char outMissing[][12],
+                FlightSelector::MissingStatus *outMissingStatus, time_t *outMissingWhenUtc, int maxMissing,
                 int *outMissingCount, bool *outAnyFlagged, uint32_t *outFixMs) {
     Lock lock;
     if (!gEverPublished) return false;
@@ -135,7 +148,11 @@ bool getFlights(Flight *outFlights, int maxOut, int *outCount, char outMissing[]
     for (int i = 0; i < n; i++) outFlights[i] = gPublished[i];
     *outCount = n;
     const int nm = gPublishedMissingCount < maxMissing ? gPublishedMissingCount : maxMissing;
-    for (int i = 0; i < nm; i++) memcpy(outMissing[i], gPublishedMissing[i], 12);
+    for (int i = 0; i < nm; i++) {
+        memcpy(outMissing[i], gPublishedMissing[i], 12);
+        outMissingStatus[i] = gPublishedMissingStatus[i];
+        outMissingWhenUtc[i] = gPublishedMissingWhenUtc[i];
+    }
     *outMissingCount = nm;
     *outAnyFlagged = gPublishedAnyFlagged;
     *outFixMs = gPublishedFixMs;

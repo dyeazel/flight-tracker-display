@@ -7,6 +7,8 @@
 #include "DestinationVerifier.h"
 #include "FlightMath.h"
 #include "config.h"
+#include "config/ConfigStore.h"
+#include "data/AirportTable.h"
 #include "network/AdsbdbClient.h"
 #include "network/DepartureVerifier.h"
 #include "network/RouteCache.h"
@@ -59,6 +61,33 @@ void debugLogDestinationChange(const Flight &f, const char beforeCode[8]) {
                   f.destinationGuessed ? "guessed" : "confirmed", f.destination, f.destinationName);
 }
 
+// Route pinning (Phase 8): ConfigStore::pinFor() lets the user assert a tracked flight's origin and/or
+// destination, to work around a live provider's route being wrong, reused for a different day, or just
+// stale - confirmed with the user that a pin should win outright, not merely act as a tiebreaker. Applied
+// here, after the normal adsbdb/RouteCache resolution below, so it always has the last word; only touches
+// the field(s) actually pinned, via AirportTable (the same on-device table DestinationVerifier already
+// uses) so the airport *name* is correct immediately too, with no dependency on adsbdb ever succeeding.
+// Airline name/code are unaffected - a pin only overrides route fields, never the airline lookup.
+void applyPin(Flight &f, const char *pinOrigin, const char *pinDest) {
+    if (pinOrigin[0]) {
+        if (const AirportTable::AirportEntry *e = AirportTable::findByCode(pinOrigin)) {
+            strncpy(f.origin, e->code, sizeof(f.origin) - 1);
+            f.origin[sizeof(f.origin) - 1] = '\0';
+            strncpy(f.originName, e->name, sizeof(f.originName) - 1);
+            f.originName[sizeof(f.originName) - 1] = '\0';
+        }
+    }
+    if (pinDest[0]) {
+        if (const AirportTable::AirportEntry *e = AirportTable::findByCode(pinDest)) {
+            strncpy(f.destination, e->code, sizeof(f.destination) - 1);
+            f.destination[sizeof(f.destination) - 1] = '\0';
+            strncpy(f.destinationName, e->name, sizeof(f.destinationName) - 1);
+            f.destinationName[sizeof(f.destinationName) - 1] = '\0';
+            f.destinationGuessed = false;  // an asserted pin is never a "guess"
+        }
+    }
+}
+
 }  // namespace
 
 bool enrich(Flight *flights, int count) {
@@ -70,11 +99,19 @@ bool enrich(Flight *flights, int count) {
         if (strcmp(f.callsign, "N/A") == 0 || !FlightMath::isScheduledCallsign(f.callsign)) {
             continue;
         }
+
+        char pinOrigin[CallsignList::kCodeChars + 1] = "", pinDest[CallsignList::kCodeChars + 1] = "";
+        ConfigStore::pinFor(f.callsign, pinOrigin, pinDest);
+        // Nothing left for a route lookup to answer once both sides are pinned - skip the plausibility
+        // check and the RouteCache fallback (a paid AeroDataBox call) entirely rather than spend budget on
+        // a result that's about to be overridden anyway.
+        const bool fullyPinned = pinOrigin[0] && pinDest[0];
+
         AdsbdbClient::RouteInfo info;
         bool haveRoute = AdsbdbClient::lookupRoute(f.callsign, &info);
 
         bool plausible = true;
-        if (haveRoute && info.haveOriginCoords && info.haveDestCoords) {
+        if (!fullyPinned && haveRoute && info.haveOriginCoords && info.haveDestCoords) {
             plausible = FlightMath::routeIsPlausible(f.lat, f.lon, f.hasHeading, f.heading,
                                                        f.speedKt, info.originLat, info.originLon,
                                                        info.destLat, info.destLon);
@@ -85,10 +122,10 @@ bool enrich(Flight *flights, int count) {
                                         : 0;
             Serial.printf(
                 "[enrich] %s haveRoute=%d origin=%s(%.4f,%.4f) dest=%s(%.4f,%.4f) "
-                "cur=(%.4f,%.4f) heading=%.0f bearingToDest=%.0f plausible=%d\n",
+                "cur=(%.4f,%.4f) heading=%.0f bearingToDest=%.0f plausible=%d pin=%s/%s\n",
                 f.callsign, haveRoute, info.originCode, info.originLat, info.originLon,
                 info.destinationCode, info.destLat, info.destLon, f.lat, f.lon,
-                f.hasHeading ? f.heading : -1, bearingToDest, plausible);
+                f.hasHeading ? f.heading : -1, bearingToDest, plausible, pinOrigin, pinDest);
         }
 
         // adsbdb's route table is static and can be stale/wrong - if it
@@ -96,7 +133,7 @@ bool enrich(Flight *flights, int count) {
         // geometrically implausible, check the secondary provider cache
         // (AeroDataBox, via RouteCache/RouteProvider) before falling back
         // to a suspect/blank route.
-        if (!haveRoute || !plausible) {
+        if (!fullyPinned && (!haveRoute || !plausible)) {
             RouteLeg leg;
             bool gotLeg = RouteCache::lookupActiveLeg(f.callsign, &leg);
             if (DEBUG) {
@@ -127,10 +164,13 @@ bool enrich(Flight *flights, int count) {
                 }
                 f.depUtc = leg.depUtc;
                 f.arrUtc = leg.arrUtc;
-                char beforeDest[8];
-                strncpy(beforeDest, f.destination, sizeof(beforeDest));
-                DestinationVerifier::verifyOrCorrectDestination(f);
-                debugLogDestinationChange(f, beforeDest);
+                applyPin(f, pinOrigin, pinDest);
+                if (!pinDest[0]) {
+                    char beforeDest[8];
+                    strncpy(beforeDest, f.destination, sizeof(beforeDest));
+                    DestinationVerifier::verifyOrCorrectDestination(f);
+                    debugLogDestinationChange(f, beforeDest);
+                }
                 continue;
             }
         }
@@ -150,7 +190,7 @@ bool enrich(Flight *flights, int count) {
 
         if (!plausible) {
             anyFlagged = true;
-            bool originVerified = DepartureVerifier::verifyOrCorrectOrigin(
+            bool originVerified = pinOrigin[0] || DepartureVerifier::verifyOrCorrectOrigin(
                 f, info.originLat, info.originLon, info.haveOriginCoords);
             if (DEBUG && originVerified) {
                 Serial.printf("[departure] %s verified/corrected origin=%s(%s)\n", f.callsign,
@@ -159,16 +199,36 @@ bool enrich(Flight *flights, int count) {
             if (f.origin[0] && !originVerified) {
                 strncat(f.origin, ROUTE_FLAG, sizeof(f.origin) - strlen(f.origin) - 1);
             }
-            if (f.destination[0]) {
+            if (f.destination[0] && !pinDest[0]) {
                 strncat(f.destination, ROUTE_FLAG, sizeof(f.destination) - strlen(f.destination) - 1);
             }
         }
-        char beforeDest[8];
-        strncpy(beforeDest, f.destination, sizeof(beforeDest));
-        DestinationVerifier::verifyOrCorrectDestination(f);
-        debugLogDestinationChange(f, beforeDest);
+        applyPin(f, pinOrigin, pinDest);
+        if (!pinDest[0]) {
+            char beforeDest[8];
+            strncpy(beforeDest, f.destination, sizeof(beforeDest));
+            DestinationVerifier::verifyOrCorrectDestination(f);
+            debugLogDestinationChange(f, beforeDest);
+        }
     }
     return anyFlagged;
+}
+
+void classifyMissing(const char missing[][12], int missingCount, MissingStatus *outStatus, time_t *outWhenUtc) {
+    const time_t now = TimeSync::isSynced() ? TimeSync::nowUtc() : 0;
+    for (int i = 0; i < missingCount; i++) {
+        RouteLeg leg;
+        const bool gotLeg = now != 0 && RouteCache::lookupActiveLeg(missing[i], &leg);
+        if (!gotLeg) {
+            outStatus[i] = MissingStatus::Unknown;
+            outWhenUtc[i] = 0;
+            continue;
+        }
+        outStatus[i] = classifyMissingStatus(leg.depUtc, leg.arrUtc, now);
+        outWhenUtc[i] = outStatus[i] == MissingStatus::NotYetDeparted   ? leg.depUtc
+                        : outStatus[i] == MissingStatus::Landed         ? leg.arrUtc
+                                                                         : 0;
+    }
 }
 
 }  // namespace FlightSelector

@@ -9,6 +9,7 @@
 #include "display/DisplayManager.h"
 #include "flight/Flight.h"
 #include "flight/FlightMath.h"
+#include "flight/FlightSelector.h"
 #include "flight/SimFlights.h"
 #include "network/NetTask.h"
 #include "network/OpenSkyClient.h"
@@ -162,18 +163,21 @@ void loop() {
 #ifdef SIM_DATA
     static Flight simFlights[MAX_ROWS];
     static char simMissing[MAX_ROWS][12];
+    static FlightSelector::MissingStatus simMissingStatus[MAX_ROWS];
+    static time_t simMissingWhen[MAX_ROWS];
     static int shown = -2;
     const int scene = SimFlights::current(millis());
     if (scene != shown) {
         shown = scene;
-        const SimFlights::Scene sc =
-            SimFlights::fill(scene, simFlights, MAX_ROWS, simMissing, (long)TimeSync::nowUtc());
+        const SimFlights::Scene sc = SimFlights::fill(scene, simFlights, MAX_ROWS, simMissing, simMissingStatus,
+                                                       simMissingWhen, (long)TimeSync::nowUtc());
         if (sc.error) {
             display.clear(display.black);
             display.drawText8x8(4, 4, "Error fetching data:", display.red, display.black);
             display.drawText8x8(4, 14, "Sim: connection failed", display.white, display.black);
         } else {
-            Renderer::render(display, simFlights, sc.count, simMissing, sc.missingCount, sc.anyFlagged);
+            Renderer::render(display, simFlights, sc.count, simMissing, simMissingStatus, simMissingWhen,
+                              sc.missingCount, sc.anyFlagged);
             if (sc.refreshing) Renderer::drawRefreshing(display);
         }
         Serial.printf("[sim] scene %d/%d %s\n", scene, SimFlights::count(), SimFlights::name(scene));
@@ -193,6 +197,8 @@ void loop() {
 
     static Flight uiFlights[MAX_ROWS];
     static char uiMissing[MAX_ROWS][12];
+    static FlightSelector::MissingStatus uiMissingStatus[MAX_ROWS];
+    static time_t uiMissingWhen[MAX_ROWS];
     static int uiCount = 0, uiMissingCount = 0;
     static bool uiAnyFlagged = false;
     static uint32_t uiFixMs = 0;
@@ -201,24 +207,31 @@ void loop() {
 
     Flight tmpFlights[MAX_ROWS];
     char tmpMissing[MAX_ROWS][12];
+    FlightSelector::MissingStatus tmpMissingStatus[MAX_ROWS];
+    time_t tmpMissingWhen[MAX_ROWS];
     int tmpCount = 0, tmpMissingCount = 0;
     bool tmpAnyFlagged = false;
     uint32_t fixMs = 0;
-    const bool got = NetTask::getFlights(tmpFlights, MAX_ROWS, &tmpCount, tmpMissing, MAX_ROWS,
-                                         &tmpMissingCount, &tmpAnyFlagged, &fixMs);
+    const bool got = NetTask::getFlights(tmpFlights, MAX_ROWS, &tmpCount, tmpMissing, tmpMissingStatus,
+                                         tmpMissingWhen, MAX_ROWS, &tmpMissingCount, &tmpAnyFlagged, &fixMs);
 
     if (!got) {
         showPreDataStatus();
     } else if (!uiHaveData || fixMs != uiFixMs) {
         // A fresh publish since our last tick (or our very first one): adopt it and do a full redraw.
         for (int i = 0; i < tmpCount; i++) uiFlights[i] = tmpFlights[i];
-        for (int i = 0; i < tmpMissingCount; i++) memcpy(uiMissing[i], tmpMissing[i], sizeof(uiMissing[i]));
+        for (int i = 0; i < tmpMissingCount; i++) {
+            memcpy(uiMissing[i], tmpMissing[i], sizeof(uiMissing[i]));
+            uiMissingStatus[i] = tmpMissingStatus[i];
+            uiMissingWhen[i] = tmpMissingWhen[i];
+        }
         uiCount = tmpCount;
         uiMissingCount = tmpMissingCount;
         uiAnyFlagged = tmpAnyFlagged;
         uiFixMs = fixMs;
         uiHaveData = true;
-        Renderer::render(display, uiFlights, uiCount, uiMissing, uiMissingCount, uiAnyFlagged);
+        Renderer::render(display, uiFlights, uiCount, uiMissing, uiMissingStatus, uiMissingWhen, uiMissingCount,
+                          uiAnyFlagged);
         logSoakLine();
         lastSoakLogMs = now;
     } else {

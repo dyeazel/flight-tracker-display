@@ -14,9 +14,9 @@ namespace SimFlights {
 namespace {
 
 const char *const kNames[] = {
-    "commercial", "stale-route", "origin-corrected", "dest-guessed", "landed",   "long-names", "codes-only",
-    "no-timeline", "six-commercial", "ga-only",       "no-aircraft", "missing-target", "error", "refreshing",
-    "one-name",
+    "commercial",   "stale-route",     "origin-corrected", "dest-guessed",  "landed",     "long-names",
+    "codes-only",   "no-timeline",     "six-commercial",   "ga-only",       "no-aircraft", "missing-target",
+    "error",        "refreshing",      "one-name",         "missing-not-yet-departed", "missing-landed",
 };
 constexpr int kCount = sizeof(kNames) / sizeof(kNames[0]);
 int gHeld = -1;
@@ -89,10 +89,15 @@ const char *name(int scene) { return (scene >= 0 && scene < kCount) ? kNames[sce
 int current(uint32_t nowMs) { return gHeld >= 0 ? gHeld : (int)((nowMs / kStepMs) % kCount); }
 void hold(int n) { gHeld = (n >= 0 && n < kCount) ? n : -1; }
 
-Scene fill(int scene, Flight *fl, int maxFlights, char missing[][12], long nowUtc) {
+Scene fill(int scene, Flight *fl, int maxFlights, char missing[][12], FlightSelector::MissingStatus *missingStatus,
+           time_t *missingWhenUtc, long nowUtc) {
     Scene s;
     int n = 0;
     (void)maxFlights;  // every scene is <= MAX_ROWS (6) by construction
+    for (int i = 0; i < CallsignList::kMax; i++) {
+        missingStatus[i] = FlightSelector::MissingStatus::Unknown;
+        missingWhenUtc[i] = 0;
+    }
     switch (scene) {
         case 0:  // a normal commercial flight, timeline present, plus GA traffic
             commercial(fl, n, "DAL1745", "Delta Air Lines", kDenDtw, 200, 18.7f, 34180, -500, 512, nowUtc, -2.0f, 1.7f);
@@ -158,7 +163,7 @@ Scene fill(int scene, Flight *fl, int maxFlights, char missing[][12], long nowUt
             break;
         case 10:  // nothing in range
             break;
-        case 11:  // a tracked callsign that isn't in range
+        case 11:  // a tracked callsign that isn't in range, and no schedule data is known for it either
             copy(missing[0], 12, "UAL1217");
             s.missingCount = 1;
             commercial(fl, n, "DAL1745", "Delta Air Lines", kDenDtw, 200, 18.7f, 34180, -500, 512, nowUtc, -2.0f, 1.7f);
@@ -169,6 +174,20 @@ Scene fill(int scene, Flight *fl, int maxFlights, char missing[][12], long nowUt
         case 13:  // a real poll is in flight: yellow heartbeat over an otherwise normal screen
             commercial(fl, n, "DAL1745", "Delta Air Lines", kDenDtw, 200, 18.7f, 34180, -500, 512, nowUtc, -2.0f, 1.7f);
             s.refreshing = true;
+            break;
+        case 15:  // Phase 8: a tracked flight with a known future departure - "departs" status, not "not found"
+            copy(missing[0], 12, "UAL1217");
+            missingStatus[0] = FlightSelector::MissingStatus::NotYetDeparted;
+            missingWhenUtc[0] = nowUtc > 0 ? nowUtc + 5400 : 0;  // 1h30m from now
+            s.missingCount = 1;
+            commercial(fl, n, "DAL1745", "Delta Air Lines", kDenDtw, 200, 18.7f, 34180, -500, 512, nowUtc, -2.0f, 1.7f);
+            break;
+        case 16:  // Phase 8: a tracked flight that already landed - "landed" status, not "not found"
+            copy(missing[0], 12, "UAL1217");
+            missingStatus[0] = FlightSelector::MissingStatus::Landed;
+            missingWhenUtc[0] = nowUtc > 0 ? nowUtc - 3600 : 0;  // 1h ago
+            s.missingCount = 1;
+            commercial(fl, n, "DAL1745", "Delta Air Lines", kDenDtw, 200, 18.7f, 34180, -500, 512, nowUtc, -2.0f, 1.7f);
             break;
         default:
             break;

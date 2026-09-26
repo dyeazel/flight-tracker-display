@@ -145,19 +145,43 @@ void drawAirportNamesRow(DisplayManager &display, const Flight &f, int x, int y,
     display.drawText8x8(x + (int)strlen(originField) * 8, y, destField, destColor, display.black);
 }
 
+// Formats one missing-target token, e.g. "UAL1217(dep 3:45)" - Phase 8's classifyMissing() says WHY a
+// tracked flight isn't showing (not yet departed / already landed / in flight but out of range) instead of
+// a bare "not found", using the same no-leading-zero-hour local time style as drawTimelineRow() above.
+void formatMissingToken(char *out, size_t cap, const char *callsign, FlightSelector::MissingStatus status,
+                         time_t whenUtc) {
+    if (status == FlightSelector::MissingStatus::Unknown) {
+        snprintf(out, cap, "%s", callsign);
+        return;
+    }
+    const char *label = status == FlightSelector::MissingStatus::NotYetDeparted   ? "dep"
+                        : status == FlightSelector::MissingStatus::Landed         ? "arr"
+                                                                                   : "in flight";
+    if (whenUtc == 0) {
+        snprintf(out, cap, "%s(%s)", callsign, label);
+        return;
+    }
+    struct tm local;
+    localtime_r(&whenUtc, &local);
+    snprintf(out, cap, "%s(%s %d:%02d)", callsign, label, local.tm_hour, local.tm_min);
+}
+
 }  // namespace
 
 void render(DisplayManager &display, Flight *flights, int count, char missing[][12],
-            int missingCount, bool anyFlagged) {
+            const FlightSelector::MissingStatus *missingStatus, const time_t *missingWhenUtc, int missingCount,
+            bool anyFlagged) {
     display.clear(display.black);
     drawHeartbeat(display);
 
     int y = 4;
     if (missingCount > 0) {
-        char text[40] = "Not found: ";
+        char text[100] = "Not found: ";
         for (int i = 0; i < missingCount; i++) {
+            char token[24];
+            formatMissingToken(token, sizeof(token), missing[i], missingStatus[i], missingWhenUtc[i]);
             if (i > 0) strncat(text, ", ", sizeof(text) - strlen(text) - 1);
-            strncat(text, missing[i], sizeof(text) - strlen(text) - 1);
+            strncat(text, token, sizeof(text) - strlen(text) - 1);
         }
         display.drawText8x8(4, y, text, display.red, display.black);
         y += 12;

@@ -2,12 +2,13 @@
 
 #include "display/DisplayManager.h"
 #include "flight/Flight.h"
+#include "flight/FlightSelector.h"
 
 // Screen rendering, ported from cyd_nearby_flights.py's
 // render()/render_values()/draw_value_line()/draw_trend_icon()/draw_heartbeat().
 namespace Renderer {
 
-// Full redraw (clears the screen first): missing-targets line and/or
+// Full redraw (clears the screen first): missing-targets line(s) and/or
 // "No aircraft in range", then each flight - commercial (has airline data)
 // flights get airline name+flight number on their own line, then
 // route+values sharing a second line, then a third line with the full
@@ -17,8 +18,11 @@ namespace Renderer {
 // each flight's value-line y/color
 // (Flight::valueY/valueColor) so renderValues() can redraw just that line
 // later without a full clear - see there for why that matters.
+// missingStatus/missingWhenUtc (Phase 8, parallel to missing[]/missingCount) say WHY a tracked flight
+// isn't showing - e.g. "departs 3:45" instead of a bare "not found" - see FlightSelector::classifyMissing().
 void render(DisplayManager &display, Flight *flights, int count, char missing[][12],
-            int missingCount, bool anyFlagged);
+            const FlightSelector::MissingStatus *missingStatus, const time_t *missingWhenUtc, int missingCount,
+            bool anyFlagged);
 
 // Partial redraw for dead-reckoning updates between real polls: overwrites
 // just each flight's distance/altitude/bearing line, at fixed width, in

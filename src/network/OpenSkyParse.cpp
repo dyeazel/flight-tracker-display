@@ -38,6 +38,13 @@ void parseStates(JsonVariant root, float radiusMi, float homeLat, float homeLon,
                   int maxOut, int *outCount, const CallsignList::Buf *targetCallsigns,
                   int targetCallsignCount) {
     *outCount = 0;
+    // Tracking specific callsigns: scattered into slots by each target's own configured index (not
+    // appended in OpenSky's arbitrary state order) so the display always reads in the order the user
+    // entered them - e.g. a friend's itinerary shown leg by leg - and stays stable poll to poll even if
+    // OpenSky's own ordering isn't. Compacted into outFlights below once the scan is done.
+    Flight targetSlots[CallsignList::kMax];
+    bool targetFound[CallsignList::kMax] = {false};
+
     JsonArray states = root["states"].as<JsonArray>();
     for (JsonArray s : states) {
         if (s.size() < 12) continue;
@@ -82,22 +89,23 @@ void parseStates(JsonVariant root, float radiusMi, float homeLat, float homeLon,
         f.vrateFpm = vrate ? roundf(vrate * 196.85f) : 0;
 
         if (targetCallsignCount > 0) {
-            // Tracking specific callsigns: keep only matches, in
-            // arrival order (not distance-sorted - a tracked
-            // flight could be anywhere), up to maxOut.
-            bool isTarget = false;
+            // Tracking specific callsigns: not distance-sorted (a tracked flight could be anywhere) -
+            // record into this target's own slot; see the scatter/compact comment above.
             for (int ti = 0; ti < targetCallsignCount; ti++) {
                 if (strcmp(f.callsign, targetCallsigns[ti]) == 0) {
-                    isTarget = true;
+                    targetSlots[ti] = f;
+                    targetFound[ti] = true;
                     break;
                 }
             }
-            if (isTarget && *outCount < maxOut) {
-                outFlights[*outCount] = f;
-                (*outCount)++;
-            }
         } else {
             insertSorted(outFlights, *outCount, maxOut, f);
+        }
+    }
+
+    if (targetCallsignCount > 0) {
+        for (int ti = 0; ti < targetCallsignCount && *outCount < maxOut; ti++) {
+            if (targetFound[ti]) outFlights[(*outCount)++] = targetSlots[ti];
         }
     }
 }

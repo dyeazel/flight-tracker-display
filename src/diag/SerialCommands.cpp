@@ -11,6 +11,7 @@
 #include "diag/Diag.h"
 #include "diag/NetStats.h"
 #include "flight/FlightMath.h"
+#include "flight/FlightSelector.h"
 #include "network/AdsbdbClient.h"
 #include "network/RouteCache.h"
 #include "network/WifiManager.h"
@@ -78,21 +79,30 @@ void cmdScan() {
     reply(d);
 }
 
-// Reads "callsigns" ([str,...], 0-CallsignList::kMax entries) into out. Returns nullptr on success, else
-// the error to report.
-const char *parseCallsigns(JsonDocument &in, CallsignList::Buf *out, int *count) {
+// Reads "callsigns" ([[callsign, origin, destination], ...], 0-CallsignList::kMax entries; origin/
+// destination are each "" or omitted for an unpinned field, mirroring ../../mlb-board's [league, id]
+// positional-array precedent) into out. Returns nullptr on success, else the error to report.
+const char *parseCallsigns(JsonDocument &in, CallsignList::Entry *out, int *count) {
     *count = 0;
     if (!in["callsigns"].is<JsonArray>()) return nullptr;  // omitted = no tracked callsigns
     JsonArray arr = in["callsigns"].as<JsonArray>();
     if (arr.size() > (size_t)CallsignList::kMax) return "too_many_callsigns";
     for (JsonVariant v : arr) {
-        if (!v.is<const char *>()) return "bad_json";
-        const char *s = v.as<const char *>();
+        if (!v.is<JsonArray>()) return "bad_json";
+        JsonArray e = v.as<JsonArray>();
+        if (e.size() < 1 || e.size() > 3 || !e[0].is<const char *>()) return "bad_json";
+        const char *cs = e[0].as<const char *>();
         // Reject outright rather than silently truncating - a truncated callsign would validate fine
         // (still uppercase alnum, still <= kCallsignChars) and get saved as something the caller never
         // asked for.
-        if (strlen(s) > (size_t)CallsignList::kCallsignChars) return "bad_callsign";
-        strcpy(out[*count], s);
+        if (strlen(cs) > (size_t)CallsignList::kCallsignChars) return "bad_callsign";
+        const char *origin = (e.size() > 1 && e[1].is<const char *>()) ? e[1].as<const char *>() : "";
+        const char *dest = (e.size() > 2 && e[2].is<const char *>()) ? e[2].as<const char *>() : "";
+        if (strlen(origin) > (size_t)CallsignList::kCodeChars) return "bad_origin";
+        if (strlen(dest) > (size_t)CallsignList::kCodeChars) return "bad_destination";
+        strcpy(out[*count].callsign, cs);
+        strcpy(out[*count].origin, origin);
+        strcpy(out[*count].destination, dest);
         (*count)++;
     }
     return nullptr;
@@ -102,7 +112,7 @@ void cmdSet(JsonDocument &in) {
     if (!in["ssid"].is<const char *>() || in["lat"].isNull() || in["lon"].isNull()) {
         return replyError("set", "bad_json");
     }
-    CallsignList::Buf targets[CallsignList::kMax];
+    CallsignList::Entry targets[CallsignList::kMax];
     int targetCount;
     if (const char *e = parseCallsigns(in, targets, &targetCount)) return replyError("set", e);
     const char *pass = in["pass"].is<const char *>() ? in["pass"].as<const char *>() : nullptr;
@@ -142,7 +152,12 @@ void handleCommand(JsonDocument &in, const char *cmd) {
         d["lat"] = ConfigStore::lat();
         d["lon"] = ConfigStore::lon();
         JsonArray cs = d["callsigns"].to<JsonArray>();
-        for (int i = 0; i < ConfigStore::callsignCount(); i++) cs.add(ConfigStore::callsign(i));
+        for (int i = 0; i < ConfigStore::callsignCount(); i++) {
+            JsonArray e = cs.add<JsonArray>();
+            e.add(ConfigStore::callsign(i));
+            e.add(ConfigStore::origin(i));
+            e.add(ConfigStore::destination(i));
+        }
         return reply(d);
     }
     if (!strcmp(cmd, "set")) return cmdSet(in);
@@ -171,6 +186,25 @@ void handleCommand(JsonDocument &in, const char *cmd) {
         d["net_task_stack_free_min"] = NetTask::stackFreeMin();
         d["net_task_polling"] = NetTask::isPolling();
         d["flights_shown"] = NetTask::lastPublishedCount();
+        // Phase 8: why each tracked-but-absent flight isn't showing - lets a bench session verify
+        // classifyMissing() without needing to watch the physical panel.
+        Flight diagFlights[MAX_ROWS];
+        char diagMissing[MAX_ROWS][12];
+        FlightSelector::MissingStatus diagMissingStatus[MAX_ROWS];
+        time_t diagMissingWhen[MAX_ROWS];
+        int diagFlightCount = 0, diagMissingCount = 0;
+        bool diagAnyFlagged = false;
+        uint32_t diagFixMs = 0;
+        if (NetTask::getFlights(diagFlights, MAX_ROWS, &diagFlightCount, diagMissing, diagMissingStatus,
+                                 diagMissingWhen, MAX_ROWS, &diagMissingCount, &diagAnyFlagged, &diagFixMs)) {
+            JsonArray missing = d["missing"].to<JsonArray>();
+            for (int i = 0; i < diagMissingCount; i++) {
+                JsonArray e = missing.add<JsonArray>();
+                e.add(diagMissing[i]);
+                e.add(FlightSelector::missingStatusName(diagMissingStatus[i]));
+                e.add((uint32_t)diagMissingWhen[i]);
+            }
+        }
 #endif
         return reply(d);
     }
