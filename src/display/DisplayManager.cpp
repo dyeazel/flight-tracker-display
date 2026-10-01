@@ -1,96 +1,97 @@
 #include "DisplayManager.h"
 
+#include <Arduino.h>
+#include <TFT_eSPI.h>
+#include <lvgl.h>
+
 #include "display/PanelInit.h"
-
-void DisplayManager::begin() {
-    // ../../cyd-common's shared panel bring-up (init/rotation/backlight) - see PanelInit.h for the
-    // empirical rationale (ILI9341_2_DRIVER + TFT_INVERSION_ON + rotation 1). Confirmed to match the
-    // original MicroPython version's on-screen orientation.
-    PanelInit::begin(tft_);
-
-    white = tft_.color565(255, 255, 255);
-    black = tft_.color565(0, 0, 0);
-    green = tft_.color565(0, 255, 0);
-    gray = tft_.color565(150, 150, 150);
-    red = tft_.color565(255, 60, 60);
-    yellow = tft_.color565(255, 210, 0);
-
-    tft_.fillScreen(black);
-}
-
-void DisplayManager::clear(uint16_t color) { tft_.fillScreen(color); }
-
-void DisplayManager::drawText8x8(int x, int y, const char *text, uint16_t fg, uint16_t bg) {
-    tft_.setTextFont(1);
-    for (int i = 0; text[i] != '\0'; i++) {
-        tft_.drawChar(x + i * 8, y, text[i], fg, bg, 1);
-    }
-}
-
-void DisplayManager::fillRect(int x, int y, int w, int h, uint16_t color) {
-    tft_.fillRect(x, y, w, h, color);
-}
-
-void DisplayManager::fillTriangle(int cx, int cy, int radius, bool pointingUp, uint16_t color) {
-    if (pointingUp) {
-        tft_.fillTriangle(cx, cy - radius, cx - radius, cy + radius, cx + radius, cy + radius, color);
-    } else {
-        tft_.fillTriangle(cx, cy + radius, cx - radius, cy - radius, cx + radius, cy - radius, color);
-    }
-}
-
 #ifdef SCREEN_CAPTURE
 #include "watchdog/WatchdogManager.h"
+#endif
 
-// Panel readback on this board (ILI9341_2 clone) reports each pixel's RED channel one pixel late: the value
-// read at position n carries the green/blue of pixel n but the red of pixel n-1. Found with a bench test
-// (1,224 of 1,280 random-colour pixels wrong raw, 0 wrong once corrected, twice). It also explains why
-// readPixel() returned wrong reds. So pixel n's true red is taken from the read at n+1: each strip reads
-// one extra row (a linear burst, so the first pixel of the next row supplies the last pixel's red).
-// readRect() also returns byte-swapped RGB565 (TFT_eSPI's pushImage convention), swapped back here.
-//
-// Known limit: the very last pixel of the screen (bottom-right) has no following pixel to borrow red
-// from, so it takes its red from the previous pixel - the corner is background black in every screen.
-//
-// Each strip's whole line (header + hex payload + newline) is built into one buffer and sent with a
-// SINGLE Serial.write() - not assembled from many small ones. NetTask now runs concurrently and logs to
-// Serial on its own schedule (e.g. "[net-t] ... FAIL ..."); the original version built each line from ~80
-// separate Serial.write() calls, any pair of which a NetTask log line could land between, corrupting that
-// strip for the capture tool. Found by reproducing it 3/3 times capturing during a forced outage (NetTask
-// logging a failure every retry) - see tools/screenshot.py's caller. SerialCommands::reply() already uses
-// this same one-write discipline for JSON replies, for the identical reason.
-void DisplayManager::dumpScreen() {
-    constexpr int kStrip = 8;
-    constexpr int kMaxW = 320;
-    static uint16_t buf[kMaxW * (kStrip + 1)];
-    // Header ("#S 0 240 320 8 ") + 2 bytes/pixel * 2 hex chars/byte * kMaxW * kStrip + newline.
-    static char line[32 + kMaxW * kStrip * 4 + 1];
-    auto swap16 = [](uint16_t v) -> uint16_t { return (uint16_t)((v >> 8) | (v << 8)); };
-    const int W = tft_.width() < kMaxW ? tft_.width() : kMaxW;
-    const int H = tft_.height();
-    static const char *hex = "0123456789abcdef";
+namespace {
 
-    for (int y = 0; y < H; y += kStrip) {
-        const int rows = (H - y) < kStrip ? (H - y) : kStrip;
-        const bool lastStrip = (y + rows >= H);
-        const int readRows = lastStrip ? rows : rows + 1;
-        tft_.readRect(0, y, W, readRows, buf);
+constexpr int kWidth = 320;
+constexpr int kHeight = 240;
+constexpr int kBufLines = 16;  // trimmed from mlb-board's 24 - DRAM is tighter here (4 density modes + touch + logos)
 
-        int len = snprintf(line, sizeof(line), "#S 0 %d %d %d ", y, W, rows);
-        const int count = W * rows, total = W * readRows;
-        for (int n = 0; n < count; n++) {
-            const uint16_t raw = swap16(buf[n]);
-            const uint16_t next = (n + 1 < total) ? swap16(buf[n + 1]) : raw;
-            const uint16_t px = (uint16_t)((next & 0xF800) | (raw & 0x07FF));
-            const uint8_t lo = px & 0xFF, hi = px >> 8;  // low byte first
-            line[len++] = hex[lo >> 4];
-            line[len++] = hex[lo & 15];
-            line[len++] = hex[hi >> 4];
-            line[len++] = hex[hi & 15];
+TFT_eSPI tft;
+#ifdef SCREEN_CAPTURE
+bool gCapture = false;
+#endif
+
+// Static draw buffer: no heap use for rendering. RGB565 = 2 bytes/pixel.
+alignas(4) uint8_t drawBuf[kWidth * kBufLines * 2];
+
+void flushCb(lv_display_t *disp, const lv_area_t *area, uint8_t *pxMap) {
+    const uint32_t w = lv_area_get_width(area);
+    const uint32_t h = lv_area_get_height(area);
+#ifdef SCREEN_CAPTURE
+    // Captures the pixels LVGL is actually sending, not a panel readback (see dumpScreen()'s comment for
+    // why this board needs that distinction) - the same technique ../../mlb-board's DisplayManager uses.
+    if (gCapture) {
+        Serial.printf("#S %d %d %u %u ", (int)area->x1, (int)area->y1, (unsigned)w, (unsigned)h);
+        static const char *hex = "0123456789abcdef";
+        char chunk[128];
+        const uint8_t *b = pxMap;
+        for (uint32_t i = 0; i < w * h * 2; i += 64) {
+            const uint32_t n = (w * h * 2 - i) < 64 ? (w * h * 2 - i) : 64;
+            for (uint32_t k = 0; k < n; k++) {
+                chunk[2 * k] = hex[b[i + k] >> 4];
+                chunk[2 * k + 1] = hex[b[i + k] & 15];
+            }
+            Serial.write((const uint8_t *)chunk, n * 2);
         }
-        line[len++] = '\n';
-        Serial.write((const uint8_t *)line, len);
+        Serial.print('\n');
+        if (area->y2 >= kHeight - 1) gCapture = false;  // the last strip of a full redraw
+    }
+#endif
+    tft.startWrite();
+    tft.setAddrWindow(area->x1, area->y1, w, h);
+    tft.pushColors(reinterpret_cast<uint16_t *>(pxMap), w * h, true);  // true = swap bytes
+    tft.endWrite();
+    lv_display_flush_ready(disp);
+}
+
+uint32_t tickCb() { return millis(); }
+
+}  // namespace
+
+namespace DisplayManager {
+
+void begin() {
+    // ../../cyd-common's shared panel bring-up (init/rotation/backlight) - see PanelInit.h for the
+    // empirical rationale (ILI9341_2_DRIVER + TFT_INVERSION_ON + rotation 1).
+    PanelInit::begin(tft);
+    tft.fillScreen(TFT_BLACK);
+
+    lv_init();
+    lv_tick_set_cb(tickCb);
+    lv_display_t *disp = lv_display_create(kWidth, kHeight);
+    lv_display_set_flush_cb(disp, flushCb);
+    lv_display_set_buffers(disp, drawBuf, nullptr, sizeof(drawBuf), LV_DISPLAY_RENDER_MODE_PARTIAL);
+}
+
+void tick() { lv_timer_handler(); }
+
+#ifdef SCREEN_CAPTURE
+// Captures at LVGL's flush time (flushCb() above), not via a panel readback the way the pre-LVGL version
+// of this file did (tft.readRect() + an empirically-corrected red-channel-off-by-one quirk). Switched
+// during Phase 9's bring-up: that readback path silently returned stale/wrong data specifically for
+// LVGL's chunked partial-render flushes (a solid full-screen fill still read back fine - the quirk's
+// correction assumed the old code's own draw/readback timing - but real content never appeared, with no
+// error - only found by comparing against a flush-time capture, which showed the correct pixels). Forces
+// a full redraw so every strip actually flushes.
+void dumpScreen() {
+    gCapture = true;
+    lv_obj_invalidate(lv_screen_active());
+    const uint32_t start = millis();
+    while (gCapture && millis() - start < 10000) {
+        lv_timer_handler();
         WatchdogManager::markProgress();
+        delay(5);
     }
 }
 #endif
+
+}  // namespace DisplayManager

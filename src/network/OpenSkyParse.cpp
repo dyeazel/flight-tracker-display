@@ -9,22 +9,34 @@ namespace OpenSkyParse {
 
 namespace {
 
-// Inserts f into the maxCount-sized array arr (sorted ascending by
-// distanceMi), keeping only the closest maxCount candidates seen so far -
-// avoids needing a separate large buffer for all candidates before
+// Ranks a as "should sort before b" - likely-commercial flights (by callsign shape; real airline enrichment
+// hasn't happened yet at parse time, so this callsign heuristic - the same one FlightSelectorEnrich.cpp
+// trusts to decide whether a flight is worth a route lookup - is the only commercial signal available
+// here) always sort ahead of GA, and within the same tier, nearer sorts ahead of farther. Keeps a busy
+// area's local GA traffic from filling every slot before a farther-out airliner is ever kept - see
+// insertSorted()'s comment.
+bool ranksBefore(const Flight &a, const Flight &b) {
+    const bool aCommercial = FlightMath::isScheduledCallsign(a.callsign);
+    const bool bCommercial = FlightMath::isScheduledCallsign(b.callsign);
+    if (aCommercial != bCommercial) return aCommercial;
+    return a.distanceMi < b.distanceMi;
+}
+
+// Inserts f into the maxCount-sized array arr (sorted by ranksBefore()), keeping only the best maxCount
+// candidates seen so far - avoids needing a separate large buffer for all candidates before
 // sorting/truncating, unlike a naive "collect everything then sort" port.
 void insertSorted(Flight *arr, int &count, int maxCount, const Flight &f) {
     if (count < maxCount) {
         int i = count;
-        while (i > 0 && arr[i - 1].distanceMi > f.distanceMi) {
+        while (i > 0 && ranksBefore(f, arr[i - 1])) {
             arr[i] = arr[i - 1];
             i--;
         }
         arr[i] = f;
         count++;
-    } else if (maxCount > 0 && f.distanceMi < arr[maxCount - 1].distanceMi) {
+    } else if (maxCount > 0 && ranksBefore(f, arr[maxCount - 1])) {
         int i = maxCount - 1;
-        while (i > 0 && arr[i - 1].distanceMi > f.distanceMi) {
+        while (i > 0 && ranksBefore(f, arr[i - 1])) {
             arr[i] = arr[i - 1];
             i--;
         }

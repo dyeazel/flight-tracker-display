@@ -65,6 +65,10 @@
   .crow input.code { min-width: 0; padding: .6rem .3rem; text-align: center; }
   .crow .state { font-size: 1rem; width: 1.4rem; text-align: center; }
   #addCallsign { margin-top: .7rem; }
+  .arow { display: grid; grid-template-columns: 1fr auto auto; gap: .35rem; align-items: center; margin-top: .5rem; }
+  .arow input.code { min-width: 0; padding: .6rem .3rem; text-align: center; }
+  .arow .state { font-size: 1rem; width: 1.4rem; text-align: center; }
+  #addRadarAirport { margin-top: .7rem; }
   [hidden] { display: none !important; }
   a { color: var(--accent); }
 </style>
@@ -125,6 +129,13 @@
         </div>
         <div class="actions"><button type="button" id="useLocation">Use my current location</button></div>
         <p class="hint" id="locHint"></p>
+        <label for="homeAirportCode" style="margin-top:.9rem">Or set to an airport</label>
+        <div class="row">
+          <input type="text" id="homeAirportCode" maxlength="4" autocapitalize="characters" spellcheck="false"
+                 placeholder="e.g. ORD">
+          <button type="button" id="useAirportBtn">Use this airport</button>
+        </div>
+        <p class="hint" id="homeAirportHint"></p>
       </fieldset>
 
       <fieldset id="modeSet">
@@ -148,6 +159,31 @@
         <p class="hint" id="callsignsNote" hidden></p>
       </fieldset>
 
+      <fieldset id="displaySet">
+        <legend>Display</legend>
+        <p class="hint">On the tracker itself: tap the left/right edge of the screen to cycle these; tap the top/bottom edge to page through flights that don't fit.</p>
+        <label for="displayMode">Layout</label>
+        <select id="displayMode">
+          <option value="0">Max density (most flights per screen)</option>
+          <option value="1">Two per screen, with airline logos</option>
+          <option value="2">One per screen, most detail</option>
+          <option value="3">Radar</option>
+        </select>
+      </fieldset>
+
+      <fieldset id="radarSet">
+        <legend>Radar screen</legend>
+        <label for="radarRange">Radar range (miles)</label>
+        <input type="number" id="radarRange" min="5" max="200" step="1">
+        <p class="hint">How far out the radar screen's rings reach - independent of the search radius above,
+           which still controls what's fetched at all. A smaller range zooms in for a less crowded view.</p>
+        <label style="margin-top:.9rem">Always-shown airports (optional)</label>
+        <p class="hint">Each shows as a "+" and its code on the radar screen, at its real location.</p>
+        <div id="radarAirportRows"></div>
+        <div class="actions" id="addRadarAirport"><button type="button" id="addRadarAirportBtn">+ Add an airport</button></div>
+        <p class="hint" id="radarAirportsNote" hidden></p>
+      </fieldset>
+
       <div class="actions"><button class="primary" type="submit" id="saveBtn">Save to flight tracker</button></div>
       <div id="saveMsg" class="msg" hidden role="status" aria-live="polite"></div>
     </form>
@@ -163,9 +199,11 @@
 "use strict";
 
 const MAX_CALLSIGNS_DEFAULT = 8;   // the firmware reports its own limit in "hello" (maxCallsigns); this is the default
+const MAX_RADAR_AIRPORTS_DEFAULT = 6;  // ditto, via "hello"'s maxRadarAirports
 // Common USB-serial chips on ESP32 boards: Silicon Labs CP210x, WCH CH340/CH9102, FTDI, Espressif native USB.
 const USB_FILTERS = [{ usbVendorId: 0x10c4 }, { usbVendorId: 0x1a86 }, { usbVendorId: 0x0403 }, { usbVendorId: 0x303a }];
 const RADIUS_AUTO = -1.0;   // must match config.h's RADIUS_MI_AUTO
+const RADAR_RANGE_DEFAULT = 20;  // must match config.h's DEFAULT_RADAR_RANGE_MI - only used if "get" omits it (old firmware)
 
 const $ = (id) => document.getElementById(id);
 const enc = new TextEncoder();
@@ -280,9 +318,22 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // ---- Tracked-callsigns editor ----
 // Each row: { value, state } where state is "unchecked" | "checking" | "ok" | "bad" | "unverified".
 let callsigns = [];
-let caps = { proto: 2, maxCallsigns: MAX_CALLSIGNS_DEFAULT };
+let caps = { proto: 2, maxCallsigns: MAX_CALLSIGNS_DEFAULT, maxRadarAirports: MAX_RADAR_AIRPORTS_DEFAULT };
 
 const maxCallsigns = () => caps.maxCallsigns || MAX_CALLSIGNS_DEFAULT;
+const maxRadarAirports = () => caps.maxRadarAirports || MAX_RADAR_AIRPORTS_DEFAULT;
+
+// Resolves a code against the device's own on-board AirportTable (unlike checkCallsign()'s adsbdb call,
+// this never touches the network - the device answers instantly from its own flash) - shared by the radar
+// airports editor below and the "use this airport" home-location shortcut.
+async function lookupAirport(code) {
+  try {
+    const r = await dev.request({ cmd: "airport_lookup", code });
+    return r.ok && r.found ? { code: r.code, name: r.name, lat: r.lat, lon: r.lon } : null;
+  } catch (_) {
+    return null;
+  }
+}
 const STATE_ICON = { unchecked: "", checking: "…", ok: "✓", bad: "✕", unverified: "?" };
 const STATE_TITLE = {
   unchecked: "", checking: "Checking with adsbdb…", ok: "Recognized by adsbdb",
@@ -368,6 +419,64 @@ function addCallsign() {
   inputs[inputs.length - 3]?.focus();
 }
 
+// ---- Radar-airports editor ----
+// Each row: { value, state } where state is "unchecked" | "checking" | "ok" | "bad".
+let radarAirports = [];
+
+function renderRadarAirports() {
+  const rows = $("radarAirportRows");
+  rows.replaceChildren();
+  radarAirports.forEach((row, i) => {
+    const input = el("input", { type: "text", className: "code", maxlength: 4, autocapitalize: "characters",
+                                 spellcheck: false, placeholder: "e.g. ORD", ariaLabel: `Radar airport ${i + 1}`,
+                                 value: row.value });
+    input.addEventListener("input", () => {
+      row.value = input.value.toUpperCase();
+      input.value = row.value;
+      row.state = "unchecked";
+      renderRadarAirportState(i);
+    });
+    input.addEventListener("blur", () => { if (row.value && row.state === "unchecked") checkRadarAirport(row, i); });
+    const state = el("span", { className: "state", id: `radarState${i}` });
+    const rm = el("button", { type: "button", textContent: "✕", ariaLabel: `Remove radar airport ${i + 1}` });
+    rm.addEventListener("click", () => { radarAirports.splice(i, 1); renderRadarAirports(); });
+    rows.append(el("div", { className: "arow" }, input, state, rm));
+    renderRadarAirportState(i);
+  });
+  $("addRadarAirportBtn").disabled = radarAirports.length >= maxRadarAirports();
+  const note = $("radarAirportsNote");
+  note.hidden = radarAirports.length < maxRadarAirports();
+  note.textContent = radarAirports.length >= maxRadarAirports() ? `That's the maximum of ${maxRadarAirports()} airports.` : "";
+}
+
+function renderRadarAirportState(i) {
+  const row = radarAirports[i];
+  const stateEl = $(`radarState${i}`);
+  if (!stateEl) return;
+  const icon = { unchecked: "", checking: "…", ok: "✓", bad: "✕" }[row.state] || "";
+  const title = { checking: "Checking…", ok: "Found", bad: "Not a recognized airport code" }[row.state] || "";
+  stateEl.textContent = icon;
+  stateEl.title = title + (row.state === "bad" ? " - click to check again" : "");
+  stateEl.style.cursor = row.value && row.state === "bad" ? "pointer" : "";
+  stateEl.onclick = row.value && row.state === "bad" ? () => checkRadarAirport(row, i) : null;
+}
+
+async function checkRadarAirport(row, i) {
+  row.state = "checking";
+  renderRadarAirportState(i);
+  const found = await lookupAirport(row.value);
+  row.state = found ? "ok" : "bad";
+  renderRadarAirportState(i);
+}
+
+function addRadarAirport() {
+  if (radarAirports.length >= maxRadarAirports()) return;
+  radarAirports.push({ value: "", state: "unchecked" });
+  renderRadarAirports();
+  const inputs = $("radarAirportRows").querySelectorAll("input");
+  inputs[inputs.length - 1]?.focus();
+}
+
 function syncMode() {
   const specific = $("modeSpecific").checked;
   $("radiusRow").hidden = specific;
@@ -411,6 +520,12 @@ function loadForm(get) {
   syncRadiusAuto();
   syncMode();
   renderCallsigns();
+  $("displayMode").value = String(get.display_mode ?? 0);
+  $("radarRange").value = get.radar_range_mi ?? RADAR_RANGE_DEFAULT;
+  radarAirports = (get.radar_airports || []).map((code) => ({ value: code, state: "ok" }));
+  renderRadarAirports();
+  $("homeAirportCode").value = "";
+  $("homeAirportHint").textContent = "";
   $("pass").value = "";
   $("openNet").checked = false;
   $("passHint").textContent = get.hasPass
@@ -443,7 +558,8 @@ async function connect() {
       try { hello = await dev.request({ cmd: "hello" }, 1000); } catch (_) { await sleep(300); }
     }
     if (!hello || !hello.ok) throw new Error("No answer from the flight tracker. Is it running the latest firmware?");
-    caps = { proto: hello.proto || 1, maxCallsigns: hello.maxCallsigns || MAX_CALLSIGNS_DEFAULT };
+    caps = { proto: hello.proto || 1, maxCallsigns: hello.maxCallsigns || MAX_CALLSIGNS_DEFAULT,
+             maxRadarAirports: hello.maxRadarAirports || MAX_RADAR_AIRPORTS_DEFAULT };
     say("connectMsg", "ok", `Connected to your flight tracker (${chipName(port)}${hello.fw ? ", firmware " + hello.fw : ""}).`);
     $("disconnectBtn").hidden = false;
     $("connectBtn").hidden = true;
@@ -510,6 +626,18 @@ function useMyLocation() {
   );
 }
 
+async function useAirport() {
+  const code = $("homeAirportCode").value.trim().toUpperCase();
+  $("homeAirportCode").value = code;
+  if (!codeLooksValid(code) || !code) { $("homeAirportHint").textContent = "Enter a 2 to 4 letter/number airport code."; return; }
+  $("homeAirportHint").textContent = "Looking up " + code + "…";
+  const found = await lookupAirport(code);
+  if (!found) { $("homeAirportHint").textContent = code + " isn't a recognized airport code."; return; }
+  $("lat").value = found.lat.toFixed(6);
+  $("lon").value = found.lon.toFixed(6);
+  $("homeAirportHint").textContent = `Filled in from ${found.name} (${found.code}).`;
+}
+
 async function save(ev) {
   ev.preventDefault();
   const ssid = $("ssid").value;
@@ -545,6 +673,17 @@ async function save(ev) {
   }
   if (open) cmd.pass = "";                      // explicit: open network
   else if (pass) cmd.pass = pass;               // new password; omitted = keep the stored one
+  cmd.display_mode = parseInt($("displayMode").value, 10);
+
+  const radarRange = parseFloat($("radarRange").value);
+  if (!Number.isFinite(radarRange) || radarRange < 5 || radarRange > 200)
+    return say("saveMsg", "err", "Radar range must be between 5 and 200 miles.");
+  cmd.radar_range_mi = radarRange;
+  const radarTracked = radarAirports.filter((a) => a.value.trim());
+  if (radarTracked.some((a) => a.state === "bad")) return say("saveMsg", "err", "One of the radar airports isn't recognized - fix or remove it.");
+  if (radarTracked.some((a) => !codeLooksValid(a.value)))
+    return say("saveMsg", "err", "A radar airport code isn't valid - 2 to 4 letters/numbers.");
+  cmd.radar_airports = radarTracked.map((a) => a.value.trim());
 
   $("saveBtn").disabled = true;
   say("saveMsg", "info", "Saving…");
@@ -559,6 +698,10 @@ async function save(ev) {
         bad_destination: "One of the destination airport codes isn't recognized.",
         too_many_callsigns: "Too many flights: the flight tracker follows at most " + maxCallsigns() + ".",
         duplicate_callsign: "Each flight can only be added once.",
+        bad_radar_range: "Radar range must be between 5 and 200 miles.",
+        bad_radar_airport: "One of the radar airport codes isn't recognized.",
+        duplicate_radar_airport: "Each radar airport can only be added once.",
+        too_many_radar_airports: "Too many radar airports: the flight tracker follows at most " + maxRadarAirports() + ".",
       }[r.error] || r.error);
     }
     say("saveMsg", "info", "Saved. Connecting to " + ssid + "…");
@@ -589,6 +732,7 @@ async function save(ev) {
 
 function init() {
   renderCallsigns();
+  renderRadarAirports();
   if (!("serial" in navigator)) { $("unsupported").hidden = false; $("app").hidden = true; return; }
   $("connectBtn").addEventListener("click", connect);
   $("disconnectBtn").addEventListener("click", disconnect);
@@ -603,10 +747,12 @@ function init() {
     $("pass").focus();
   });
   $("useLocation").addEventListener("click", useMyLocation);
+  $("useAirportBtn").addEventListener("click", useAirport);
   $("modeNearby").addEventListener("change", syncMode);
   $("modeSpecific").addEventListener("change", syncMode);
   $("radiusAuto").addEventListener("change", syncRadiusAuto);
   $("addCallsignBtn").addEventListener("click", addCallsign);
+  $("addRadarAirportBtn").addEventListener("click", addRadarAirport);
   $("openNet").addEventListener("change", syncOpen);
   $("showPass").addEventListener("click", () => {
     const p = $("pass"); const show = p.type === "password";

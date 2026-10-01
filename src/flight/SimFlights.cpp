@@ -94,7 +94,11 @@ Scene fill(int scene, Flight *fl, int maxFlights, char missing[][12], FlightSele
     Scene s;
     int n = 0;
     (void)maxFlights;  // every scene is <= MAX_ROWS (6) by construction
-    for (int i = 0; i < CallsignList::kMax; i++) {
+    // missing[]/missingStatus[]/missingWhenUtc[] are parallel arrays the caller sizes to MAX_ROWS (see
+    // main.cpp's simMissing/simMissingStatus/simMissingWhen) - NOT CallsignList::kMax (8), which overran
+    // both by 2 entries and corrupted whatever static memory followed them (caught live: it didn't crash,
+    // it just silently broke FlightScreen's rendering - nothing showed up on any density mode's screen).
+    for (int i = 0; i < MAX_ROWS; i++) {
         missingStatus[i] = FlightSelector::MissingStatus::Unknown;
         missingWhenUtc[i] = 0;
     }

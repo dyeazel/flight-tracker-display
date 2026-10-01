@@ -63,6 +63,20 @@ that isn't currently showing up reports why (`FlightSelector::classifyMissing()`
 `RouteCache` schedule lookup as route enrichment): not yet departed, already landed, or in flight but out
 of range, instead of a bare "not found" - useful for watching a friend's multi-leg itinerary leg by leg.
 
+## Display: LVGL, four layouts, touch-cycled
+
+The display runs on LVGL 9 (`src/display/DisplayManager.h`, `src/render/FlightScreen.h`) instead of raw
+`TFT_eSPI` draws. Four density modes (`ConfigStore::DisplayMode`, also settable from `web/config.html`):
+max density (today's row-per-flight text layout), two-per-screen and one-per-screen (larger text, each
+with an on-demand-fetched airline logo - `src/render/LogoStore.h`), and a bearing/distance radar view
+(`src/render/RadarScreen.h`, `src/render/RadarMath.h`). Tap the left/right screen edge to cycle the mode
+itself; tap the top/bottom edge to page through flights that don't fit the current mode's screen
+(`src/input/Gesture.h` - a 4-zone tap classifier, pure/native-tested, over raw touch samples from
+`../../cyd-common`'s shared `TouchPanel` driver). Airline logos are fetched from Google's flight-logo CDN
+(`gstatic.com/flights/airline_logos`) and decoded with `../../cyd-common`'s shared `RgbaPng` (also used by
+`../../mlb-board` for team logos; extended here with plain-RGB colour-type support after real coverage
+gaps turned up - some carriers' logos have no alpha channel).
+
 ## Key findings from bring-up (real hardware, this session)
 
 ### Display: ILI9341_2_DRIVER + TFT_INVERSION_ON + rotation=1

@@ -22,12 +22,18 @@ float gLon = HOME_LON;
 float gRadiusMi = RADIUS_MI_AUTO;
 CallsignList::Entry gCallsigns[CallsignList::kMax];
 int gCallsignCount = 0;
+DisplayMode gDisplayMode = DisplayMode::MaxDensity;
+float gRadarRangeMi = DEFAULT_RADAR_RANGE_MI;
+RadarAirportList::Code gRadarAirports[RadarAirportList::kMax];
+int gRadarAirportCount = 0;
 
 void logConfig() {
     char enc[CallsignList::kEncodedMax];
     CallsignList::encode(gCallsigns, gCallsignCount, enc, sizeof(enc));
-    Serial.printf("[cfg] ssid='%s' pass=%s lat=%.6f lon=%.6f radius=%.1f callsigns=%s\n", gSsid,
-                  gPass[0] ? "set" : "none", gLat, gLon, gRadiusMi, enc);
+    char radarEnc[RadarAirportList::kEncodedMax];
+    RadarAirportList::encode(gRadarAirports, gRadarAirportCount, radarEnc, sizeof(radarEnc));
+    Serial.printf("[cfg] ssid='%s' pass=%s lat=%.6f lon=%.6f radius=%.1f callsigns=%s radarRange=%.1f radarAirports=%s\n",
+                  gSsid, gPass[0] ? "set" : "none", gLat, gLon, gRadiusMi, enc, gRadarRangeMi, radarEnc);
 }
 
 void load(Preferences &p) {
@@ -40,6 +46,14 @@ void load(Preferences &p) {
     char enc[CallsignList::kEncodedMax];
     enc[p.getString("callsigns", enc, sizeof(enc))] = '\0';
     gCallsignCount = CallsignList::decode(enc, gCallsigns, CallsignList::kMax);
+
+    const uint8_t mode = p.getUChar("dispMode", (uint8_t)DisplayMode::MaxDensity);
+    gDisplayMode = mode <= (uint8_t)DisplayMode::Radar ? (DisplayMode)mode : DisplayMode::MaxDensity;
+
+    gRadarRangeMi = p.getFloat("radarRange", DEFAULT_RADAR_RANGE_MI);
+    char radarEnc[RadarAirportList::kEncodedMax];
+    radarEnc[p.getString("radarAirports", radarEnc, sizeof(radarEnc))] = '\0';
+    gRadarAirportCount = RadarAirportList::decode(radarEnc, gRadarAirports, RadarAirportList::kMax);
 }
 }  // namespace
 
@@ -91,22 +105,53 @@ bool pinFor(const char *callsign, char *outOrigin, char *outDestination) {
     return false;
 }
 
+float radarRangeMi() { return gRadarRangeMi; }
+int radarAirportCount() { return gRadarAirportCount; }
+const char *radarAirport(int i) { return (i >= 0 && i < gRadarAirportCount) ? gRadarAirports[i] : ""; }
+
+DisplayMode displayMode() { return gDisplayMode; }
+
+void setDisplayMode(DisplayMode mode) {
+    if (mode == gDisplayMode) return;  // skip the NVS write on every same-mode tap/no-op set
+    gDisplayMode = mode;
+    Preferences p;
+    if (!p.begin("cfg", false)) return;
+    p.putUChar("dispMode", (uint8_t)mode);
+    p.end();
+    Serial.printf("[cfg] display mode -> %d\n", (int)mode);
+}
+
 const char *save(const char *ssid, const char *pass, float lat, float lon, float radiusMi,
-                  const CallsignList::Entry *entries, int entryCount) {
+                  const CallsignList::Entry *entries, int entryCount, float radarRangeMi,
+                  const RadarAirportList::Code *radarAirports, int radarAirportCount) {
     if (!ssid || !ssid[0] || strlen(ssid) > kSsidMax) return "bad_ssid";
     // WPA2 passphrases are 8..63 characters; an empty one means an open network.
     if (pass && pass[0] && (strlen(pass) < 8 || strlen(pass) > kPassMax)) return "bad_pass";
     if (lat < -90.0f || lat > 90.0f) return "bad_lat";
     if (lon < -180.0f || lon > 180.0f) return "bad_lon";
     if (radiusMi != RADIUS_MI_AUTO && (radiusMi < 1.0f || radiusMi > 20000.0f)) return "bad_radius";
+    if (radarRangeMi < RADAR_RANGE_MIN_MI || radarRangeMi > RADAR_RANGE_MAX_MI) return "bad_radar_range";
     if (const char *e = CallsignList::validate(entries, entryCount)) return e;
     // CallsignList::validate() only checked pin shape - confirm each non-empty pin is a real airport code.
     for (int i = 0; i < entryCount; i++) {
         if (entries[i].origin[0] && !AirportTable::findByCode(entries[i].origin)) return "bad_origin";
         if (entries[i].destination[0] && !AirportTable::findByCode(entries[i].destination)) return "bad_destination";
     }
+    if (const char *e = RadarAirportList::validate(radarAirports, radarAirportCount)) {
+        // RadarAirportList's own error names ("too_many_airports"/"duplicate_airport") are ambiguous
+        // against CallsignList's ("too_many_callsigns"/etc.) once surfaced to the web page - rename here.
+        if (!strcmp(e, "too_many_airports")) return "too_many_radar_airports";
+        if (!strcmp(e, "duplicate_airport")) return "duplicate_radar_airport";
+        return "bad_radar_airport";
+    }
+    // RadarAirportList::validate() only checked code shape - confirm each one is a real airport.
+    for (int i = 0; i < radarAirportCount; i++) {
+        if (!AirportTable::findByCode(radarAirports[i])) return "bad_radar_airport";
+    }
     char enc[CallsignList::kEncodedMax];
     CallsignList::encode(entries, entryCount, enc, sizeof(enc));
+    char radarEnc[RadarAirportList::kEncodedMax];
+    RadarAirportList::encode(radarAirports, radarAirportCount, radarEnc, sizeof(radarEnc));
 
     Preferences p;
     if (!p.begin("cfg", false)) return "save_failed";
@@ -116,6 +161,8 @@ const char *save(const char *ssid, const char *pass, float lat, float lon, float
     p.putFloat("lon", lon);
     p.putFloat("radius", radiusMi);
     p.putString("callsigns", enc);
+    p.putFloat("radarRange", radarRangeMi);
+    p.putString("radarAirports", radarEnc);
     p.putBool("seeded", true);
     load(p);
     p.end();

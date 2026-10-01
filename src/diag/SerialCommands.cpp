@@ -8,13 +8,17 @@
 #include "config.h"
 #include "config/CallsignList.h"
 #include "config/ConfigStore.h"
+#include "config/RadarAirportList.h"
+#include "data/AirportTable.h"
 #include "diag/Diag.h"
 #include "diag/NetStats.h"
 #include "flight/FlightMath.h"
 #include "flight/FlightSelector.h"
+#include "input/Gesture.h"
 #include "network/AdsbdbClient.h"
 #include "network/RouteCache.h"
 #include "network/WifiManager.h"
+#include "render/FlightScreen.h"
 #include "serial/SerialCore.h"
 #include "time/TimeSync.h"
 #ifndef SIM_DATA
@@ -23,7 +27,6 @@
 
 #ifdef SCREEN_CAPTURE
 #include "display/DisplayManager.h"
-extern DisplayManager display;  // defined in main.cpp
 #endif
 #ifdef SIM_DATA
 #include "flight/SimFlights.h"
@@ -108,6 +111,23 @@ const char *parseCallsigns(JsonDocument &in, CallsignList::Entry *out, int *coun
     return nullptr;
 }
 
+// Reads "radar_airports" (["ORD","MKE"], 0-RadarAirportList::kMax entries) into out. Returns nullptr on
+// success, else the error to report. Mirrors parseCallsigns() above.
+const char *parseRadarAirports(JsonDocument &in, RadarAirportList::Code *out, int *count) {
+    *count = 0;
+    if (!in["radar_airports"].is<JsonArray>()) return nullptr;  // omitted = no extra radar airports
+    JsonArray arr = in["radar_airports"].as<JsonArray>();
+    if (arr.size() > (size_t)RadarAirportList::kMax) return "too_many_radar_airports";
+    for (JsonVariant v : arr) {
+        if (!v.is<const char *>()) return "bad_json";
+        const char *code = v.as<const char *>();
+        if (strlen(code) > (size_t)RadarAirportList::kCodeChars) return "bad_radar_airport";
+        strcpy(out[*count], code);
+        (*count)++;
+    }
+    return nullptr;
+}
+
 void cmdSet(JsonDocument &in) {
     if (!in["ssid"].is<const char *>() || in["lat"].isNull() || in["lon"].isNull()) {
         return replyError("set", "bad_json");
@@ -115,12 +135,24 @@ void cmdSet(JsonDocument &in) {
     CallsignList::Entry targets[CallsignList::kMax];
     int targetCount;
     if (const char *e = parseCallsigns(in, targets, &targetCount)) return replyError("set", e);
+    RadarAirportList::Code radarAirports[RadarAirportList::kMax];
+    int radarAirportCount;
+    if (const char *e = parseRadarAirports(in, radarAirports, &radarAirportCount)) return replyError("set", e);
     const char *pass = in["pass"].is<const char *>() ? in["pass"].as<const char *>() : nullptr;
     const float radiusMi = in["radius_mi"].isNull() ? RADIUS_MI_AUTO : in["radius_mi"].as<float>();
+    const float radarRangeMi = in["radar_range_mi"].isNull() ? DEFAULT_RADAR_RANGE_MI : in["radar_range_mi"].as<float>();
     const char *err = ConfigStore::save(in["ssid"].as<const char *>(), pass, in["lat"].as<float>(),
-                                         in["lon"].as<float>(), radiusMi, targets, targetCount);
+                                         in["lon"].as<float>(), radiusMi, targets, targetCount, radarRangeMi,
+                                         radarAirports, radarAirportCount);
     if (err) return replyError("set", err);
     WifiManager::reconfigure();  // reconnect with the new credentials, no reboot needed
+    // display_mode (Phase 9) is a narrow, separate setting (ConfigStore::setDisplayMode(), not bundled into
+    // save()) since it's also changed on-device via a tap, not just from this page - out of range is
+    // silently ignored rather than failing the whole set, since the rest of the config still saved fine.
+    if (in["display_mode"].is<int>()) {
+        const int m = in["display_mode"].as<int>();
+        if (m >= 0 && m <= (int)ConfigStore::DisplayMode::Radar) ConfigStore::setDisplayMode((ConfigStore::DisplayMode)m);
+    }
     return replyOk("set");
 }
 
@@ -133,6 +165,7 @@ void handleCommand(JsonDocument &in, const char *cmd) {
         d["board"] = "cyd";
         d["proto"] = 2;  // 2 = runtime WiFi/location/callsign config (Phase 7); 1 = compile-time only
         d["maxCallsigns"] = CallsignList::kMax;
+        d["maxRadarAirports"] = RadarAirportList::kMax;
         return reply(d);
     }
     if (!strcmp(cmd, "get")) {
@@ -151,6 +184,7 @@ void handleCommand(JsonDocument &in, const char *cmd) {
         d["hasPass"] = ConfigStore::hasPass();
         d["lat"] = ConfigStore::lat();
         d["lon"] = ConfigStore::lon();
+        d["display_mode"] = (int)ConfigStore::displayMode();
         JsonArray cs = d["callsigns"].to<JsonArray>();
         for (int i = 0; i < ConfigStore::callsignCount(); i++) {
             JsonArray e = cs.add<JsonArray>();
@@ -158,10 +192,31 @@ void handleCommand(JsonDocument &in, const char *cmd) {
             e.add(ConfigStore::origin(i));
             e.add(ConfigStore::destination(i));
         }
+        d["radar_range_mi"] = ConfigStore::radarRangeMi();
+        JsonArray ra = d["radar_airports"].to<JsonArray>();
+        for (int i = 0; i < ConfigStore::radarAirportCount(); i++) ra.add(ConfigStore::radarAirport(i));
         return reply(d);
     }
     if (!strcmp(cmd, "set")) return cmdSet(in);
     if (!strcmp(cmd, "scan")) return cmdScan();
+    // {"cmd":"airport_lookup","code":"ORD"}: resolves a code against the on-device AirportTable - used by
+    // the web config page both to preview/validate a radar-airports row and to fill in "home location" from
+    // an airport, without duplicating the (several-thousand-entry) table into JS. Local table lookup, so
+    // unlike checkCallsign()'s adsbdb call this never needs a network round-trip.
+    if (!strcmp(cmd, "airport_lookup")) {
+        const AirportTable::AirportEntry *e = AirportTable::findByCode(in["code"] | "");
+        JsonDocument d;
+        d["ok"] = true;
+        d["cmd"] = "airport_lookup";
+        d["found"] = e != nullptr;
+        if (e) {
+            d["code"] = e->code;
+            d["name"] = e->name;
+            d["lat"] = e->lat;
+            d["lon"] = e->lon;
+        }
+        return reply(d);
+    }
     if (!strcmp(cmd, "forget")) {
         ConfigStore::forgetWifi();
         WifiManager::reconfigure();
@@ -245,6 +300,33 @@ void handleCommand(JsonDocument &in, const char *cmd) {
         Diag::testResetNetworkStats();
         return replyOk("_resetdiag");
     }
+    // {"cmd":"_gesture","action":"mode_next"|"mode_prev"|"page_next"|"page_prev"}: exercises
+    // FlightScreen::applyGesture() (Phase 9/10) without needing a physical touch, since a bench session has
+    // no finger. Reports the resulting display_mode so a screenshot-driven test can confirm the switch.
+    if (!strcmp(cmd, "_gesture")) {
+        const char *action = in["action"] | "";
+        Gesture::Action a = Gesture::Action::None;
+        if (!strcmp(action, "mode_next")) a = Gesture::Action::ModeNext;
+        else if (!strcmp(action, "mode_prev")) a = Gesture::Action::ModePrev;
+        else if (!strcmp(action, "page_next")) a = Gesture::Action::PageNext;
+        else if (!strcmp(action, "page_prev")) a = Gesture::Action::PagePrev;
+        else return replyError("_gesture", "bad_json");
+        FlightScreen::applyGesture(a);
+        JsonDocument d;
+        d["ok"] = true;
+        d["cmd"] = "_gesture";
+        d["display_mode"] = (int)ConfigStore::displayMode();
+        return reply(d);
+    }
+    // {"cmd":"_dumptext","slot":0|1|2}: raw markup text of a TwoUp card (slot 0/1) or the OneUp card
+    // (slot 2) - lets a bench script verify composeCardText()'s output without OCR'ing a screenshot.
+    if (!strcmp(cmd, "_dumptext")) {
+        JsonDocument d;
+        d["ok"] = true;
+        d["cmd"] = "_dumptext";
+        d["text"] = FlightScreen::debugCardText(in["slot"] | 0);
+        return reply(d);
+    }
 #ifdef SIM_DATA
     if (!strcmp(cmd, "_sim")) {  // {"cmd":"_sim","n":3} holds scene 3; n < 0 resumes cycling. Always reports count/scene.
         SimFlights::hold(in["n"] | -1);
@@ -263,11 +345,11 @@ void handleCommand(JsonDocument &in, const char *cmd) {
         JsonDocument d;
         d["ok"] = true;
         d["cmd"] = "_shot";
-        d["w"] = display.width();
-        d["h"] = display.height();
+        d["w"] = 320;
+        d["h"] = 240;
         reply(d);
         Serial.flush();
-        display.dumpScreen();
+        DisplayManager::dumpScreen();
         return;
     }
 #endif

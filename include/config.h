@@ -106,6 +106,13 @@ extern bool DEBUG;
 #define DEFAULT_RADIUS_MI 50.0f
 #define CALLSIGN_SEARCH_RADIUS_MI 10000.0f
 
+// Radar screen's own zoom/scale, independent of the search radius above (which still governs what's
+// fetched at all) - deliberately narrower than DEFAULT_RADIUS_MI so the radar view isn't crowded out of
+// the box. See ConfigStore::radarRangeMi().
+#define DEFAULT_RADAR_RANGE_MI 20.0f
+#define RADAR_RANGE_MIN_MI 5.0f
+#define RADAR_RANGE_MAX_MI 200.0f
+
 #define REFRESH_SECONDS 30
 #define REDRAW_SECONDS 2
 #define MAX_ROWS 6

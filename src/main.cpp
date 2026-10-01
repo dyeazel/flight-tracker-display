@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <LittleFS.h>
 #include <WiFi.h>
 #include <string.h>
 
@@ -11,10 +12,13 @@
 #include "flight/FlightMath.h"
 #include "flight/FlightSelector.h"
 #include "flight/SimFlights.h"
+#include "input/Gesture.h"
+#include "input/TouchPanel.h"
 #include "network/NetTask.h"
 #include "network/OpenSkyClient.h"
 #include "network/WifiManager.h"
-#include "render/Renderer.h"
+#include "render/FlightScreen.h"
+#include "render/LogoStore.h"
 #include "time/TimeSync.h"
 #include "watchdog/Health.h"
 #include "watchdog/WatchdogManager.h"
@@ -24,8 +28,11 @@
 // task - see network/NetTask.h); this loop() only reads what it last published and draws. See Health.h for
 // the recovery logic this split enables (a stuck network call used to be able to freeze the whole board -
 // measured live in a 2026-09-21 soak run - and now cannot).
+//
+// Phase 9: display moved to LVGL (see display/DisplayManager.h, render/FlightScreen.h) - this loop only
+// ticks LVGL and polls touch (see input/Gesture.h) at full speed; FlightScreen owns all actual drawing.
 
-DisplayManager display;
+Gesture::Tracker gGesture;
 
 static void logSoakLine() {
     Serial.printf(
@@ -76,31 +83,24 @@ static void showPreDataStatus() {
     }
     if (state == lastState && !failureChanged) return;
     lastState = state;
-    display.clear(display.black);
     switch (state) {
         case -1:
-            display.drawText8x8(4, 4, "Setup needed", display.white, display.black);
-            display.drawText8x8(4, 14, "Open web/config.html and", display.white, display.black);
-            display.drawText8x8(4, 24, "connect this board by USB", display.white, display.black);
+            FlightScreen::showMessage("Setup needed", "Open web/config.html and connect this board by USB");
             break;
         case 0:
-            display.drawText8x8(4, 4, "Connecting to WiFi...", display.white, display.black);
-            if (lastFailure[0]) {
-                display.drawText8x8(4, 14, lastFailure, display.red, display.black);
-            }
+            FlightScreen::showMessage("Connecting to WiFi...", lastFailure[0] ? lastFailure : nullptr, 0xFF3C3C);
             break;
         case 1:
-            display.drawText8x8(4, 4, "Syncing time...", display.white, display.black);
+            FlightScreen::showMessage("Syncing time...");
             break;
         case 2:
-            display.drawText8x8(4, 4, "Error fetching data:", display.red, display.black);
             // OpenSkyClient::lastErrorMessage() is written by NetTask without a lock - fine for a status
             // line that only needs to be eventually-consistent and repaints again in well under a second
             // if it happens to be caught mid-update.
-            display.drawText8x8(4, 14, OpenSkyClient::lastErrorMessage(), display.white, display.black);
+            FlightScreen::showMessage("Error fetching data:", OpenSkyClient::lastErrorMessage());
             break;
         default:
-            display.drawText8x8(4, 4, "Loading...", display.white, display.black);
+            FlightScreen::showMessage("Loading...");
             break;
     }
 }
@@ -113,7 +113,11 @@ void setup() {
                   Diag::bootReason());
     ConfigStore::begin();
 
-    display.begin();
+    DisplayManager::begin();
+    FlightScreen::begin();
+    TouchPanel::begin();
+    LittleFS.begin(true);  // true = format on mount failure - airline logos (LogoStore) live here
+    LogoStore::begin();
     TimeSync::begin();
     Serial.println("[time] NTP sync requested");
 
@@ -148,6 +152,11 @@ void setup() {
 void loop() {
     WatchdogManager::markProgress();
     SerialCommands::update();
+    DisplayManager::tick();  // drives LVGL's flush/animation timer - every iteration, not gated by REDRAW_SECONDS
+
+    TouchPanel::Sample touch = TouchPanel::poll();
+    const Gesture::Action gesture = gGesture.feed(touch.pressed, touch.x, touch.y, millis());
+    if (gesture != Gesture::Action::None) FlightScreen::applyGesture(gesture);
 
     static bool timeSyncLogged = false;
     if (!timeSyncLogged && TimeSync::isSynced()) {
@@ -166,19 +175,18 @@ void loop() {
     static FlightSelector::MissingStatus simMissingStatus[MAX_ROWS];
     static time_t simMissingWhen[MAX_ROWS];
     static int shown = -2;
+    FlightScreen::setWifiStatus(WifiManager::isConnected());
     const int scene = SimFlights::current(millis());
     if (scene != shown) {
         shown = scene;
         const SimFlights::Scene sc = SimFlights::fill(scene, simFlights, MAX_ROWS, simMissing, simMissingStatus,
                                                        simMissingWhen, (long)TimeSync::nowUtc());
         if (sc.error) {
-            display.clear(display.black);
-            display.drawText8x8(4, 4, "Error fetching data:", display.red, display.black);
-            display.drawText8x8(4, 14, "Sim: connection failed", display.white, display.black);
+            FlightScreen::showMessage("Error fetching data:", "Sim: connection failed");
         } else {
-            Renderer::render(display, simFlights, sc.count, simMissing, simMissingStatus, simMissingWhen,
-                              sc.missingCount, sc.anyFlagged);
-            if (sc.refreshing) Renderer::drawRefreshing(display);
+            FlightScreen::update(simFlights, sc.count, simMissing, simMissingStatus, simMissingWhen,
+                                 sc.missingCount, sc.anyFlagged);
+            if (sc.refreshing) FlightScreen::drawRefreshing();
         }
         Serial.printf("[sim] scene %d/%d %s\n", scene, SimFlights::count(), SimFlights::name(scene));
     }
@@ -186,6 +194,7 @@ void loop() {
     return;
 #else
     Health::update();
+    FlightScreen::setWifiStatus(WifiManager::isConnected());
 
     static uint32_t lastTickMs = 0;
     const uint32_t now = millis();
@@ -230,8 +239,8 @@ void loop() {
         uiAnyFlagged = tmpAnyFlagged;
         uiFixMs = fixMs;
         uiHaveData = true;
-        Renderer::render(display, uiFlights, uiCount, uiMissing, uiMissingStatus, uiMissingWhen, uiMissingCount,
-                          uiAnyFlagged);
+        FlightScreen::update(uiFlights, uiCount, uiMissing, uiMissingStatus, uiMissingWhen, uiMissingCount,
+                             uiAnyFlagged);
         logSoakLine();
         lastSoakLogMs = now;
     } else {
@@ -240,7 +249,8 @@ void loop() {
         float elapsedS = (now - uiFixMs) / 1000.0f;
         if (elapsedS > DEAD_RECKON_MAX_S) elapsedS = (float)DEAD_RECKON_MAX_S;
         FlightMath::applyDeadReckoning(uiFlights, uiCount, elapsedS, ConfigStore::lat(), ConfigStore::lon());
-        Renderer::renderValues(display, uiFlights, uiCount);
+        FlightScreen::update(uiFlights, uiCount, uiMissing, uiMissingStatus, uiMissingWhen, uiMissingCount,
+                             uiAnyFlagged);
         if (now - lastSoakLogMs >= 60000UL) {
             logSoakLine();
             lastSoakLogMs = now;
@@ -249,10 +259,10 @@ void loop() {
 
     if (uiHaveData) {
         if (NetTask::isPolling()) {
-            Renderer::drawRefreshing(display);
+            FlightScreen::drawRefreshing();
         } else if (Diag::msSinceLastOk() >
                    3UL * (uint32_t)OpenSkyClient::currentRefreshInterval() * 1000UL + 30000UL) {
-            Renderer::drawStale(display);
+            FlightScreen::drawStale();
         }
     }
 #endif

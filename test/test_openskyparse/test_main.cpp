@@ -32,6 +32,14 @@ static const char *kStatesNearOrd = R"JSON({"time":1790101409,"states":[
 
 static const char *kNoStates = R"JSON({"time":1790101409,"states":null})JSON";
 
+// Synthetic: a GA callsign (N-number - fails isScheduledCallsign's 3-letter+digit shape) just a few miles
+// from home, and a commercial-shaped callsign much farther away but still in range. Both are within radius,
+// but a maxOut of 1 forces the "only room for one" contest insertSorted() has to resolve.
+static const char *kMixedGaAndCommercial = R"JSON({"time":1790101409,"states":[
+["ga0001","N441MV  ","United States",1790101409,1790101409,-88.985,43.19,3000,false,80,0,0,null,3200,null,false,0],
+["cs0001","UAL1217 ","United States",1790101409,1790101409,-88.5,43.6,33000,false,450,0,0,null,34000,null,false,0]
+]})JSON";
+
 void test_parses_real_states_sorted_by_distance_ascending() {
     JsonDocument doc;
     TEST_ASSERT_FALSE(deserializeJson(doc, kStatesNearOrd));
@@ -81,6 +89,30 @@ void test_max_out_caps_result_count_to_closest() {
     TEST_ASSERT_EQUAL(2, count);
     TEST_ASSERT_EQUAL_STRING("AAL1985", out[0].callsign);  // the two closest, still ascending
     TEST_ASSERT_EQUAL_STRING("SKW4740", out[1].callsign);
+}
+
+// The MAX_ROWS cap (Phase 11): a busy area's nearby GA traffic must not crowd a farther-out commercial
+// flight out of the kept slots just because it's closer - selection prioritizes likely-commercial flights
+// (by callsign shape) over GA, distance-ordered within each tier, not raw nearest-first across both.
+void test_commercial_flight_kept_over_nearer_ga_when_slots_full() {
+    JsonDocument doc;
+    TEST_ASSERT_FALSE(deserializeJson(doc, kMixedGaAndCommercial));
+    Flight out[1];
+    int count = 0;
+    OpenSkyParse::parseStates(doc.as<JsonVariant>(), /*radiusMi=*/150.0f, kHomeLat, kHomeLon, out, 1, &count, nullptr, 0);
+    TEST_ASSERT_EQUAL(1, count);
+    TEST_ASSERT_EQUAL_STRING("UAL1217", out[0].callsign);  // kept despite N441MV being much closer to home
+}
+
+void test_ga_flight_fills_leftover_slot_when_room_remains() {
+    JsonDocument doc;
+    TEST_ASSERT_FALSE(deserializeJson(doc, kMixedGaAndCommercial));
+    Flight out[2];
+    int count = 0;
+    OpenSkyParse::parseStates(doc.as<JsonVariant>(), /*radiusMi=*/150.0f, kHomeLat, kHomeLon, out, 2, &count, nullptr, 0);
+    TEST_ASSERT_EQUAL(2, count);
+    TEST_ASSERT_EQUAL_STRING("UAL1217", out[0].callsign);  // commercial tier still sorts first
+    TEST_ASSERT_EQUAL_STRING("N441MV", out[1].callsign);
 }
 
 void test_unit_conversions_match_known_row() {
@@ -209,6 +241,8 @@ int main() {
     RUN_TEST(test_target_callsigns_filters_to_matches_within_radius);
     RUN_TEST(test_target_callsigns_preserve_configured_order);
     RUN_TEST(test_max_out_caps_result_count_to_closest);
+    RUN_TEST(test_commercial_flight_kept_over_nearer_ga_when_slots_full);
+    RUN_TEST(test_ga_flight_fills_leftover_slot_when_room_remains);
     RUN_TEST(test_unit_conversions_match_known_row);
     RUN_TEST(test_on_ground_row_has_no_altitude_but_can_still_have_ground_track);
     RUN_TEST(test_null_states_yields_zero_flights);

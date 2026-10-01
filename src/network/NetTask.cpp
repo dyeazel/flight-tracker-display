@@ -14,6 +14,7 @@
 #include "flight/FlightSelector.h"
 #include "network/OpenSkyClient.h"
 #include "network/WifiManager.h"
+#include "render/LogoStore.h"
 #include "time/TimeSync.h"
 
 namespace NetTask {
@@ -117,7 +118,10 @@ void taskMain(void *) {
             Serial.println(WiFi.localIP());
             everConnected = true;
         }
-        if (WifiManager::isConnected()) pollIfDue();
+        if (WifiManager::isConnected()) {
+            pollIfDue();
+            LogoStore::service();  // at most one logo install per call - see LogoStore.h
+        }
         vTaskDelay(pdMS_TO_TICKS(100));
     }
 }
