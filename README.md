@@ -63,19 +63,47 @@ that isn't currently showing up reports why (`FlightSelector::classifyMissing()`
 `RouteCache` schedule lookup as route enrichment): not yet departed, already landed, or in flight but out
 of range, instead of a bare "not found" - useful for watching a friend's multi-leg itinerary leg by leg.
 
+Home location can also be set by typing a known airport code instead of latitude/longitude - the web page
+resolves it against the same on-device `AirportTable` via a new `airport_lookup` serial command, rather
+than duplicating the ~3,269-entry table into JS just for this.
+
 ## Display: LVGL, four layouts, touch-cycled
 
 The display runs on LVGL 9 (`src/display/DisplayManager.h`, `src/render/FlightScreen.h`) instead of raw
 `TFT_eSPI` draws. Four density modes (`ConfigStore::DisplayMode`, also settable from `web/config.html`):
 max density (today's row-per-flight text layout), two-per-screen and one-per-screen (larger text, each
-with an on-demand-fetched airline logo - `src/render/LogoStore.h`), and a bearing/distance radar view
-(`src/render/RadarScreen.h`, `src/render/RadarMath.h`). Tap the left/right screen edge to cycle the mode
-itself; tap the top/bottom edge to page through flights that don't fit the current mode's screen
+with an on-demand-fetched airline logo - `src/render/LogoStore.h` - or, for non-commercial traffic or a
+still-downloading logo, a generic airplane placeholder baked into flash from `tools/generic_plane_icon.png`
+via `tools/generate_generic_plane_icon.py`, same footprint as a real logo), and a bearing/distance radar
+view (`src/render/RadarScreen.h`, `src/render/RadarMath.h`). Tap the left/right screen edge to cycle the
+mode itself; tap the top/bottom edge to page through flights that don't fit the current mode's screen
 (`src/input/Gesture.h` - a 4-zone tap classifier, pure/native-tested, over raw touch samples from
 `../../cyd-common`'s shared `TouchPanel` driver). Airline logos are fetched from Google's flight-logo CDN
 (`gstatic.com/flights/airline_logos`) and decoded with `../../cyd-common`'s shared `RgbaPng` (also used by
 `../../mlb-board` for team logos; extended here with plain-RGB colour-type support after real coverage
 gaps turned up - some carriers' logos have no alpha channel).
+
+One-per-screen's distance/direction-from-home sit on their own line, with altitude/speed/heading on a
+second line below (heading, when the source reports one, as `"NE (43°)"` - cardinal direction plus
+the raw bearing). Climbing/descending shows as a real chevron icon (LVGL's built-in `LV_SYMBOL_UP`/`DOWN`)
+in two-per-screen's card and on the radar; max density's row font (`lv_font_unscii_8`, a true monospace
+bitmap font the column math depends on) has no icon glyphs at all, so it keeps a plain `^`/`v` character
+there.
+
+The radar view has its own independent zoom (`ConfigStore::radarRangeMi()`, web-configurable, default
+20mi) separate from the search radius above it - the radius still controls what's fetched at all, the
+radar range only controls how far out its rings reach, so a narrower radar view doesn't mean fewer flights
+tracked elsewhere. A configured list of "always-shown" reference airports (`src/config/RadarAirportList.h`,
+also web-configurable) draws as a white "+" and code at each one's real position, resolved against the
+same on-device `AirportTable`. A flight's velocity vector is drawn at double its original length.
+
+A WiFi link-status icon (ported from `../../mlb-board`'s `Scoreboard::setWifiStatus`) sits in the
+lower-right corner of every mode: green while connected, red with a diagonal slash through it while not -
+separate from the existing heartbeat square (top-right), which reflects data freshness rather than the
+link itself. The loading/status screen (`FlightScreen::showMessage`, e.g. "Setup needed", "Connecting to
+WiFi...") is styled like `../../mlb-board`'s own: an explicit black screen background (previously unset,
+so LVGL's default light-grey theme color showed through behind the text) and big, centered, muted-gray
+text instead of small left-aligned white.
 
 ## Key findings from bring-up (real hardware, this session)
 
@@ -358,6 +386,20 @@ Design notes:
     This is what makes the row appear for the common case (a plausible
     adsbdb route, which never goes through `RouteCache` at all) - live-
     verified computing sane epoch values for real in-flight aircraft.
+
+## Fixed: search radius looked ignored in busy local airspace
+
+Reported symptom: the search radius set to 50mi, but only aircraft within roughly 25mi ever appeared on
+screen. Root cause wasn't the radius itself - `OpenSkyParse::parseStates()` does query the full configured
+radius - it was `MAX_ROWS` (6), the hard cap on how many aircraft are kept *at all*. `insertSorted()` kept
+whichever 6 were nearest, of any kind - in busy local airspace, 6 nearby GA/pattern aircraft alone could
+fill every slot before a farther-out airliner was ever considered, even though the fetch itself covered the
+full radius. Fixed by changing the selection key: slots go to the nearest *likely-commercial* flights first
+(`FlightMath::isScheduledCallsign()` - the same callsign-shape heuristic `FlightSelectorEnrich.cpp` already
+used to decide whether a flight was worth a route lookup, the only commercial signal available this early,
+before real airline enrichment has run), and GA traffic only fills slots commercial flights didn't need.
+`MAX_ROWS` itself is unchanged; see `test_openskyparse`'s `test_commercial_flight_kept_over_nearer_ga_when_slots_full`/
+`test_ga_flight_fills_leftover_slot_when_room_remains`.
 
 ## Known simplification: TARGET_CALLSIGNS
 
