@@ -5,6 +5,7 @@
 
 #include "config.h"
 #include "config/ConfigStore.h"
+#include "config/RadarAirportList.h"
 #include "data/AirportTable.h"
 #include "flight/FlightMath.h"
 #include "render/RadarMath.h"
@@ -83,38 +84,80 @@ void drawHeadingLine(lv_layer_t *layer, int cx, int cy, RadarMath::Point v) {
     lv_draw_line(layer, &d);
 }
 
-void drawText(lv_layer_t *layer, int x, int y, int w, int h, const lv_color_t &color, const char *text) {
+void drawText(lv_layer_t *layer, int x, int y, int w, int h, const lv_color_t &color, const char *text,
+              lv_text_align_t align = LV_TEXT_ALIGN_LEFT) {
     lv_draw_label_dsc_t d;
     lv_draw_label_dsc_init(&d);
     d.color = color;
     d.font = &lv_font_montserrat_14;
     d.text = text;
+    d.align = align;
     lv_area_t a = {x, y, x + w, y + h};
     lv_draw_label(layer, &d, &a);
 }
 
-// White "+" and code label at an airport's projected position (same projection flights use) - the radar's
-// always-shown reference airports (ConfigStore::radarAirportCount()/radarAirport()), resolved against the
+int textWidth(const char *text) {
+    lv_point_t sz;
+    lv_text_get_size(&sz, text, &lv_font_montserrat_14, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+    return (int)sz.x;
+}
+
+// Visible height of the two-line flight label (line 2 sits 13px under line 1; 14pt caps/digits are ~11-14px
+// tall, so this is a bit tighter than the font's 16px line height - closer to the ink that actually collides).
+constexpr int kLabelLineStep = 13, kLabelBlockH = 27;
+constexpr int kAirportPlusHalf = 6, kAirportLabelH = 14;
+
+struct AirportMark {
+    int cx, cy, labelX, labelW;
+    const char *code;
+};
+
+// White "+" and code label at each always-shown airport's projected position (same projection flights use) -
+// the radar's reference airports (ConfigStore::radarAirportCount()/radarAirport()), resolved against the
 // on-device AirportTable at draw time. A linear scan over ~3269 entries per configured airport, done only
-// once per redraw at poll cadence - negligible.
-void drawAirports(lv_layer_t *layer, float pxPerMile) {
-    for (int i = 0; i < ConfigStore::radarAirportCount(); i++) {
+// once per redraw at poll cadence - negligible. Airports keep a fixed label side (whichever has more room)
+// and are placed first, so flight labels route around them (see onDraw()).
+int collectAirports(AirportMark *out, int cap, float pxPerMile) {
+    int n = 0;
+    for (int i = 0; i < ConfigStore::radarAirportCount() && n < cap; i++) {
         const AirportTable::AirportEntry *ap = AirportTable::findByCode(ConfigStore::radarAirport(i));
         if (!ap) continue;
         const float bearing = FlightMath::bearingDeg(ConfigStore::lat(), ConfigStore::lon(), ap->lat, ap->lon);
         const float distMi = FlightMath::haversineMiles(ConfigStore::lat(), ConfigStore::lon(), ap->lat, ap->lon);
         const RadarMath::Point p = RadarMath::project(bearing, distMi, pxPerMile, kMaxRadiusPx);
-        const int cx = kCenterX + (int)p.x, cy = kCenterY + (int)p.y;
-        drawText(layer, cx - 6, cy - 6, 12, 12, kWhite, LV_SYMBOL_PLUS);
+        AirportMark &m = out[n++];
+        m.cx = kCenterX + (int)p.x;
+        m.cy = kCenterY + (int)p.y;
+        m.code = ap->code;
+        m.labelW = textWidth(ap->code);
+        m.labelX = m.cx > 320 / 2 ? m.cx - 8 - m.labelW : m.cx + 8;
+    }
+    return n;
+}
 
-        // Label goes on whichever side has more room, so it doesn't run off the panel edge - same rule
-        // the flight labels below use.
-        const bool leftHalf = cx > 320 / 2;
-        const int labelW = 40;
-        const int lx = leftHalf ? cx - 8 - labelW : cx + 8;
-        drawText(layer, lx, cy - 6, labelW, 12, kWhite, ap->code);
+void drawAirports(lv_layer_t *layer, const AirportMark *marks, int n) {
+    for (int i = 0; i < n; i++) {
+        const AirportMark &m = marks[i];
+        drawText(layer, m.cx - kAirportPlusHalf, m.cy - kAirportPlusHalf, 12, 12, kWhite, LV_SYMBOL_PLUS);
+        drawText(layer, m.labelX, m.cy - 6, m.labelW + 4, 12, kWhite, m.code);
     }
 }
+
+RadarMath::Rect rect(int x1, int y1, int x2, int y2) {
+    RadarMath::Rect r;
+    r.x1 = (float)x1;
+    r.y1 = (float)y1;
+    r.x2 = (float)x2;
+    r.y2 = (float)y2;
+    return r;
+}
+
+struct FlightMark {
+    int cx, cy;
+    bool clipped;
+    RadarMath::Point hv;
+    char line1[16], line2[24];
+};
 
 void onDraw(lv_event_t *e) {
     lv_layer_t *layer = lv_event_get_layer(e);
@@ -124,23 +167,35 @@ void onDraw(lv_event_t *e) {
     drawAxisLine(layer, kCenterX, kCenterY - (int)kMaxRadiusPx - 6, kCenterX, kCenterY + (int)kMaxRadiusPx + 6);
     for (int i = 1; i <= kRingCount; i++) drawRing(layer, (int)(kMaxRadiusPx * i / kRingCount));
 
+    // Airports first - they're fixed obstacles the flight labels route around.
+    AirportMark airports[RadarAirportList::kMax];
+    const int nAirports = collectAirports(airports, RadarAirportList::kMax, pxPerMile);
+    // The N/E/S/W compass letters (RadarScreen::begin()'s labels, ~12x16px each) are obstacles too.
+    RadarMath::Rect obstacles[RadarAirportList::kMax * 2 + 4];
+    int nObstacles = 0;
+    obstacles[nObstacles++] = rect(kCenterX - 4, kCenterY - (int)kMaxRadiusPx - 20, kCenterX + 8, kCenterY - (int)kMaxRadiusPx - 4);
+    obstacles[nObstacles++] = rect(kCenterX + (int)kMaxRadiusPx + 8, kCenterY - 8, kCenterX + (int)kMaxRadiusPx + 20, kCenterY + 8);
+    obstacles[nObstacles++] = rect(kCenterX - 4, kCenterY + (int)kMaxRadiusPx + 6, kCenterX + 8, kCenterY + (int)kMaxRadiusPx + 22);
+    obstacles[nObstacles++] = rect(kCenterX - (int)kMaxRadiusPx - 18, kCenterY - 8, kCenterX - (int)kMaxRadiusPx - 4, kCenterY + 8);
+    for (int i = 0; i < nAirports; i++) {
+        const AirportMark &m = airports[i];
+        obstacles[nObstacles++] = rect(m.cx - kAirportPlusHalf, m.cy - kAirportPlusHalf, m.cx + kAirportPlusHalf,
+                                m.cy + kAirportPlusHalf);
+        obstacles[nObstacles++] = rect(m.labelX, m.cy - 6, m.labelX + m.labelW, m.cy - 6 + kAirportLabelH);
+    }
+
+    FlightMark marks[MAX_ROWS];
+    RadarMath::LabelInput in[MAX_ROWS];
     for (int i = 0; i < gFlightCount; i++) {
         const Flight &f = gFlights[i];
+        FlightMark &m = marks[i];
         const float bearing = FlightMath::bearingDeg(ConfigStore::lat(), ConfigStore::lon(), f.lat, f.lon);
         const RadarMath::Point p = RadarMath::project(bearing, f.distanceMi, pxPerMile, kMaxRadiusPx);
-        const int cx = kCenterX + (int)p.x, cy = kCenterY + (int)p.y;
-        drawSquare(layer, cx, cy, p.clipped);
-        const RadarMath::Point hv =
-            RadarMath::headingVector(f.hasHeading, f.heading, f.speedKt, kPxPerKt, kMaxHeadingLenPx);
-        drawHeadingLine(layer, cx, cy, hv);
-
-        // Labels go on whichever side has more room, so they don't run off the panel edge.
-        const bool leftHalf = cx > 320 / 2;
-        const int labelW = 64;
-        const int lx = leftHalf ? cx - kSquareHalf - 4 - labelW : cx + kSquareHalf + 4;
-        char line1[16];
-        snprintf(line1, sizeof(line1), "%s", f.callsign);
-        drawText(layer, lx, cy - 12, labelW, 12, kLabelColor, line1);
+        m.cx = kCenterX + (int)p.x;
+        m.cy = kCenterY + (int)p.y;
+        m.clipped = p.clipped;
+        m.hv = RadarMath::headingVector(f.hasHeading, f.heading, f.speedKt, kPxPerKt, kMaxHeadingLenPx);
+        snprintf(m.line1, sizeof(m.line1), "%s", f.callsign);
         // True chevron icons (LVGL's built-in LV_SYMBOL_UP/DOWN - real vector glyphs, confirmed present in
         // this build's montserrat_14) instead of a typed '^'/'v' character.
         // " " (not "") for the level case - the old plain-ASCII version used the char itself as the
@@ -149,12 +204,39 @@ void onDraw(lv_event_t *e) {
         const char *trendIcon = f.vrateFpm > ALT_TREND_THRESHOLD_FPM    ? LV_SYMBOL_UP
                                  : f.vrateFpm < -ALT_TREND_THRESHOLD_FPM ? LV_SYMBOL_DOWN
                                                                           : " ";
-        char line2[24];
-        snprintf(line2, sizeof(line2), "%.0f%s%d", f.speedKt, trendIcon, f.altitudeFt / 1000);
-        drawText(layer, lx, cy + 1, labelW, 12, kLabelColor, line2);
+        snprintf(m.line2, sizeof(m.line2), "%.0f%s%d", f.speedKt, trendIcon, f.altitudeFt / 1000);
+
+        const int w1 = textWidth(m.line1), w2 = textWidth(m.line2);
+        in[i].cx = (float)m.cx;
+        in[i].cy = (float)m.cy;
+        in[i].vx = m.hv.x;
+        in[i].vy = m.hv.y;
+        in[i].w = (float)(w1 > w2 ? w1 : w2);
+        in[i].h = (float)kLabelBlockH;
     }
 
-    drawAirports(layer, pxPerMile);
+    // Labels sit wherever they collide least with the flights' own velocity vectors, each other, the
+    // airports, and the panel edge - see RadarMath::placeLabels() (pure, native-tested).
+    RadarMath::Rect rects[MAX_ROWS];
+    RadarMath::placeLabels(in, gFlightCount, 320.0f, 240.0f, (float)kSquareHalf, obstacles, nObstacles, rects);
+
+    for (int i = 0; i < gFlightCount; i++) {
+        const FlightMark &m = marks[i];
+        drawSquare(layer, m.cx, m.cy, m.clipped);
+        drawHeadingLine(layer, m.cx, m.cy, m.hv);
+
+        const RadarMath::Rect &r = rects[i];
+        const int x = (int)r.x1, y = (int)r.y1, w = (int)(r.x2 - r.x1) + 4;
+        // Hug the marker: right-align text sitting left of it, center text straddling it (above/below).
+        const lv_text_align_t align = r.x2 <= (float)m.cx   ? LV_TEXT_ALIGN_RIGHT
+                                       : r.x1 < (float)m.cx ? LV_TEXT_ALIGN_CENTER
+                                                            : LV_TEXT_ALIGN_LEFT;
+        const int ax = align == LV_TEXT_ALIGN_RIGHT ? x - 4 : x;  // area widened 4px: keep the ink where placed
+        drawText(layer, ax, y, w, 12, kLabelColor, m.line1, align);
+        drawText(layer, ax, y + kLabelLineStep, w, 12, kLabelColor, m.line2, align);
+    }
+
+    drawAirports(layer, airports, nAirports);
 }
 
 }  // namespace

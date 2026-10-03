@@ -22,4 +22,27 @@ Point project(float bearingDeg, float distanceMi, float pxPerMile, float maxRadi
 // off past the rings). {0, 0} if `hasHeading` is false - caller should skip drawing the line entirely.
 Point headingVector(bool hasHeading, float headingDeg, float speedKt, float pxPerKt, float maxLenPx);
 
+struct Rect {
+    float x1 = 0, y1 = 0, x2 = 0, y2 = 0;  // inclusive-ish pixel bounds, screen coordinates
+};
+
+// One flight's label-placement inputs: its marker center, its heading-vector delta ({0,0} = no vector),
+// and the size of its (already measured) text block.
+struct LabelInput {
+    float cx = 0, cy = 0;
+    float vx = 0, vy = 0;
+    float w = 0, h = 0;
+};
+
+// Picks a label rectangle for each of `n` flights so that, as far as the 8 candidate spots around each marker
+// allow (preferred side, opposite side, above, below, four corners), a label never sits on its own or any
+// other flight's heading vector, never overlaps another flight's label or marker square (`markerHalf` is the
+// square's half-size), never overlaps a fixed `obstacles` rect (e.g. an airport's "+" and code), and stays
+// inside the `areaW` x `areaH` screen. The preferred side is toward the screen's center-line (left for a
+// marker right of center), matching the original fixed rule - candidates only move away from it when
+// that spot actually collides with something. Greedy start, then a few coordinate-descent passes so an
+// early flight's choice can yield to a later one's. Best-effort: if nothing fits, the least-bad spot wins.
+void placeLabels(const LabelInput *in, int n, float areaW, float areaH, float markerHalf, const Rect *obstacles,
+                 int nObstacles, Rect *out);
+
 }  // namespace RadarMath
