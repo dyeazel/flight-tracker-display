@@ -1,0 +1,10 @@
+.pio/
+.vscode/
+*.o
+include/secrets.h
+tools/airports.csv
+soak/
+__pycache__/
+*.pyc
+web/firmware/
+web/vendor/
