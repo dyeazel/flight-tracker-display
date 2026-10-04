@@ -128,7 +128,14 @@
           <div><label for="lon">Longitude</label><input type="number" id="lon" step="any" min="-180" max="180" required></div>
         </div>
         <div class="actions"><button type="button" id="useLocation">Use my current location</button></div>
-        <p class="hint" id="locHint"></p>
+        <p class="hint" id="locHint">"Use my current location" asks your browser, which on a laptop often guesses from your internet connection - check the result, or use an address below.</p>
+        <label for="homeAddress" style="margin-top:.9rem">Or look up an address</label>
+        <div class="row">
+          <input type="text" id="homeAddress" maxlength="200" autocomplete="street-address" spellcheck="false"
+                 placeholder="e.g. 1600 Pennsylvania Ave NW, Washington, DC">
+          <button type="button" id="useAddressBtn">Find address</button>
+        </div>
+        <p class="hint" id="homeAddressHint">Sent to OpenStreetMap's Nominatim service, only when you press the button. Include the city and state or country.</p>
         <label for="homeAirportCode" style="margin-top:.9rem">Or set to an airport</label>
         <div class="row">
           <input type="text" id="homeAirportCode" maxlength="4" autocapitalize="characters" spellcheck="false"
@@ -188,6 +195,24 @@
       <div id="saveMsg" class="msg" hidden role="status" aria-live="polite"></div>
     </form>
 
+    <div class="card" id="fwCard">
+      <h2>Firmware</h2>
+      <p class="hint" id="fwInstalled">Installed: connect the flight tracker above to read its version. You can also install without connecting.</p>
+      <p class="hint" id="fwAvailable" hidden></p>
+      <p class="hint" id="fwPickHint" hidden>No firmware comes with this page yet. Build it with <code>pio run -e esp32dev</code>, then reload.</p>
+      <p class="hint">Your WiFi, location, flights and display settings are kept when you update.</p>
+      <label class="check"><input type="checkbox" id="fwErase"> Erase everything first (also clears saved WiFi, location and flights - use this to recover a misbehaving flight tracker)</label>
+      <div class="actions">
+        <button type="button" id="fwInstallBtn" class="primary" disabled>Install firmware</button>
+      </div>
+      <div id="fwProgressWrap" hidden style="margin-top:.9rem">
+        <div style="background:var(--bg); border:1px solid var(--line); border-radius:8px; overflow:hidden; height:.6rem">
+          <div id="fwProgressBar" style="background:var(--accent); height:100%; width:0%"></div>
+        </div>
+      </div>
+      <div id="fwMsg" class="msg" hidden role="status" aria-live="polite"></div>
+    </div>
+
     <details>
       <summary>Technical log</summary>
       <pre id="log"></pre>
@@ -195,8 +220,14 @@
   </section>
 </main>
 
+<!-- What firmware this page can install; written by the build, absent until the first one. -->
+<script src="firmware/manifest.js"></script>
 <script>
 "use strict";
+// This page has to work opened straight from disk (file://), where Chrome will neither fetch() a file
+// nor load an ES module. So everything the Firmware card needs is an ordinary script: firmware/manifest.js
+// (loaded above), and - only when an install starts - firmware/flight-tracker.bin.js (the image, base64) and
+// vendor/firmware-install.classic.js. All of them are written by the build (see platformio.ini).
 
 const MAX_CALLSIGNS_DEFAULT = 8;   // the firmware reports its own limit in "hello" (maxCallsigns); this is the default
 const MAX_RADAR_AIRPORTS_DEFAULT = 6;  // ditto, via "hello"'s maxRadarAirports
@@ -319,6 +350,13 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // Each row: { value, state } where state is "unchecked" | "checking" | "ok" | "bad" | "unverified".
 let callsigns = [];
 let caps = { proto: 2, maxCallsigns: MAX_CALLSIGNS_DEFAULT, maxRadarAirports: MAX_RADAR_AIRPORTS_DEFAULT };
+
+// ---- Firmware install: the single merged image that comes with this page ----
+const fwManifest = window.FirmwareManifest?.boards?.cyd ?? null;   // {file, size, built, chip}, if the page was built with one
+// Flash ranges of the merged image an update must not write: the NVS partition (no_ota.csv: 0x9000, 0x5000),
+// which holds the saved WiFi/location/flights/settings. The image's bytes there are just 0xFF padding.
+const FW_PRESERVE = [[0x9000, 0xe000]];
+let installedFw = null;         // the connected board's own "fw" string, from hello
 
 const maxCallsigns = () => caps.maxCallsigns || MAX_CALLSIGNS_DEFAULT;
 const maxRadarAirports = () => caps.maxRadarAirports || MAX_RADAR_AIRPORTS_DEFAULT;
@@ -540,6 +578,21 @@ function syncOpen() {
   if (open) $("pass").value = "";
 }
 
+// Everything that follows a successful hello, whether the board was just connected or just reflashed.
+async function enterConnected(hello, port) {
+  caps = { proto: hello.proto || 1, maxCallsigns: hello.maxCallsigns || MAX_CALLSIGNS_DEFAULT,
+           maxRadarAirports: hello.maxRadarAirports || MAX_RADAR_AIRPORTS_DEFAULT };
+  installedFw = hello.fw || null;
+  say("connectMsg", "ok", `Connected to your flight tracker (${chipName(port)}${hello.fw ? ", firmware " + hello.fw : ""}).`);
+  $("disconnectBtn").hidden = false;
+  $("connectBtn").hidden = true;
+  const get = await dev.requestRetry({ cmd: "get" });
+  showState(get);
+  loadForm(get);
+  $("form").hidden = false;
+  $("fwInstalled").textContent = "Installed: " + (installedFw || "unknown");
+}
+
 async function connect() {
   say("connectMsg", "info", "");
   let port;
@@ -558,15 +611,7 @@ async function connect() {
       try { hello = await dev.request({ cmd: "hello" }, 1000); } catch (_) { await sleep(300); }
     }
     if (!hello || !hello.ok) throw new Error("No answer from the flight tracker. Is it running the latest firmware?");
-    caps = { proto: hello.proto || 1, maxCallsigns: hello.maxCallsigns || MAX_CALLSIGNS_DEFAULT,
-             maxRadarAirports: hello.maxRadarAirports || MAX_RADAR_AIRPORTS_DEFAULT };
-    say("connectMsg", "ok", `Connected to your flight tracker (${chipName(port)}${hello.fw ? ", firmware " + hello.fw : ""}).`);
-    $("disconnectBtn").hidden = false;
-    $("connectBtn").hidden = true;
-    const get = await dev.requestRetry({ cmd: "get" });
-    showState(get);
-    loadForm(get);
-    $("form").hidden = false;
+    await enterConnected(hello, port);
   } catch (e) {
     say("connectMsg", "err", e.message + " Check the cable and try again.");
     await dev.close();
@@ -582,11 +627,13 @@ async function disconnect() {
 
 function resetUi() {
   $("form").hidden = true;
+  $("fwInstalled").textContent = "Installed: connect the flight tracker above to read its version. You can also install without connecting.";
   $("deviceStatus").hidden = true;
   $("disconnectBtn").hidden = true;
   $("connectBtn").hidden = false;
   $("connectBtn").disabled = false;
   say("saveMsg", "", "");
+  say("fwMsg", "", "");
 }
 
 dev.onClose = () => { if (dev.port) { dev.port = null; resetUi(); say("connectMsg", "err", "The flight tracker was unplugged or the connection closed."); } };
@@ -624,6 +671,32 @@ function useMyLocation() {
     (err) => { $("locHint").textContent = "Could not get your location: " + err.message; },
     { timeout: 10000 },
   );
+}
+
+// Street address -> latitude/longitude via OpenStreetMap's public Nominatim service: free, no key, and it sends
+// CORS headers so it works from this page even opened from disk. Its usage policy (max 1 request/second, only
+// end-user-triggered lookups, show attribution) is why this runs per button press and never in the background.
+// Checked 2026-10-03; the US Census geocoder has no CORS headers and Open-Meteo's only matches place names.
+async function useAddress() {
+  const q = $("homeAddress").value.trim();
+  const hint = $("homeAddressHint");
+  if (!q) { hint.textContent = "Type an address first."; return; }
+  $("useAddressBtn").disabled = true;
+  hint.textContent = "Looking up…";
+  try {
+    const res = await fetch("https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=" + encodeURIComponent(q));
+    if (!res.ok) throw new Error(res.status === 429 ? "the lookup service is busy, try again in a minute" : "the lookup service answered " + res.status);
+    const hits = await res.json();
+    const lat = hits.length ? parseFloat(hits[0].lat) : NaN, lon = hits.length ? parseFloat(hits[0].lon) : NaN;
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) { hint.textContent = "No match for that address. Try adding the city and state or country."; return; }
+    $("lat").value = lat.toFixed(6);
+    $("lon").value = lon.toFixed(6);
+    hint.textContent = `Filled in from: ${hits[0].display_name}. If that isn't the right place, add more detail and search again. © OpenStreetMap contributors.`;
+  } catch (e) {
+    hint.textContent = "Could not look up the address (" + e.message + "). This needs an internet connection on this computer.";
+  } finally {
+    $("useAddressBtn").disabled = false;
+  }
 }
 
 async function useAirport() {
@@ -730,6 +803,99 @@ async function save(ev) {
   }
 }
 
+function showFirmwareOffer() {
+  const avail = $("fwAvailable");
+  avail.hidden = !fwManifest;
+  if (fwManifest) avail.textContent = `Available: flight-tracker, built ${fwManifest.built}`;
+  $("fwPickHint").hidden = !!fwManifest;
+  $("fwInstallBtn").disabled = !fwManifest;
+}
+
+const loadedScripts = new Map();
+function loadScript(src) {
+  if (!loadedScripts.has(src)) {
+    loadedScripts.set(src, new Promise((resolve, reject) => {
+      const el = document.createElement("script");
+      el.src = src;
+      el.onload = resolve;
+      el.onerror = () => { loadedScripts.delete(src); reject(new Error(`could not load ${src}`)); };
+      document.head.append(el);
+    }));
+  }
+  return loadedScripts.get(src);
+}
+
+async function loadFwBytes() {
+  const name = fwManifest.file.replace(/\.bin$/, "");
+  await loadScript(`firmware/${fwManifest.file}.js`);
+  const base64 = window.FirmwareImages?.[name];
+  if (!base64) throw new Error(`firmware/${fwManifest.file}.js did not contain the image`);
+  const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+  if (bytes.length !== fwManifest.size) throw new Error("the firmware image that comes with this page is the wrong size; rebuild it");
+  return bytes;
+}
+
+async function installFirmwareHandler() {
+  // Ask for the port first: the browser only shows its port picker in direct response to a click.
+  // The card works without a prior Connect, so the board may not have been picked yet.
+  let port = dev.port;
+  if (!port) {
+    try {
+      port = await navigator.serial.requestPort(showAll ? {} : { filters: USB_FILTERS });
+    } catch (e) {
+      if (e.name !== "NotFoundError") say("fwMsg", "err", "Could not open the port picker: " + e.message);
+      return;   // user cancelled
+    }
+  }
+  try {
+    await loadScript("vendor/firmware-install.classic.js");
+  } catch (e) {
+    say("fwMsg", "err", "Couldn't load the firmware installer (web/vendor/firmware-install.classic.js). "
+      + "It is written by the firmware build: run “pio run -e esp32dev”.");
+    return;
+  }
+  const installFirmware = window.FirmwareInstall.install;
+  if (!confirm("This will install new firmware on the flight tracker. Do not unplug it during the update. Continue?")) return;
+  const erase = $("fwErase").checked;
+  if (erase && !confirm("This will ALSO erase your saved WiFi network, location and flights - you'll need to set them up again afterward. Continue?")) return;
+
+  $("fwInstallBtn").disabled = true;
+  $("fwErase").disabled = true;
+  $("fwProgressWrap").hidden = false;
+  $("fwProgressBar").style.width = "0%";
+  say("fwMsg", "info", "Preparing…");
+
+  let released = false;
+  try {
+    const bytes = await loadFwBytes();
+    await dev.close();   // release the JSON-protocol connection; flashing needs raw control of the port
+    released = true;
+    say("fwMsg", "info", "Installing firmware…");
+    const { chipName } = await installFirmware({
+      port, bytes, erase, preserve: FW_PRESERVE,
+      onProgress: (frac) => { $("fwProgressBar").style.width = Math.round(frac * 100) + "%"; },
+      onLog: log,
+    });
+    say("fwMsg", "info", `Firmware written (${chipName}). Waiting for the flight tracker to restart…`);
+    await sleep(1500);
+    await dev.open(port);
+    let hello = null;
+    for (let i = 0; i < 15 && !hello; i++) {
+      try { hello = await dev.request({ cmd: "hello" }, 1000); } catch (_) { await sleep(300); }
+    }
+    if (!hello || !hello.ok) throw new Error("The flight tracker didn't answer after the update. Check its screen, then connect again.");
+    await enterConnected(hello, port);
+    say("fwMsg", "ok", "Firmware installed. The flight tracker is back online.");
+  } catch (e) {
+    if (released) { await dev.close(); resetUi(); }   // leave the page ready for a fresh Connect
+    say("fwMsg", "err", "Install failed: " + e.message);
+  } finally {
+    $("fwErase").disabled = false;
+    $("fwProgressWrap").hidden = true;
+    $("fwInstallBtn").disabled = !fwManifest;
+  }
+}
+
 function init() {
   renderCallsigns();
   renderRadarAirports();
@@ -748,6 +914,8 @@ function init() {
   });
   $("useLocation").addEventListener("click", useMyLocation);
   $("useAirportBtn").addEventListener("click", useAirport);
+  $("useAddressBtn").addEventListener("click", useAddress);
+  $("homeAddress").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); useAddress(); } });  // Enter must not submit the whole form
   $("modeNearby").addEventListener("change", syncMode);
   $("modeSpecific").addEventListener("change", syncMode);
   $("radiusAuto").addEventListener("change", syncRadiusAuto);
@@ -761,6 +929,8 @@ function init() {
     $("showPass").setAttribute("aria-pressed", String(show));
   });
   $("form").addEventListener("submit", save);
+  $("fwInstallBtn").addEventListener("click", installFirmwareHandler);
+  showFirmwareOffer();
 }
 init();
 </script>
